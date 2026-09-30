@@ -8,7 +8,43 @@ from app.config import settings
 from app.services.pattern_analyzer import analyze_student_patterns
 
 
-def build_prompt(patterns: dict) -> str:
+def get_previous_intervention_summary(db: Session, student_id: str) -> dict | None:
+    from app.models import Intervention
+
+    interventions = (
+        db.query(Intervention)
+        .filter(Intervention.student_id == student_id)
+        .order_by(Intervention.created_at.desc())
+        .all()
+    )
+    if not interventions:
+        return None
+
+    completed_actions = []
+    pending_actions = []
+
+    for intv in interventions:
+        for action in intv.actions:
+            entry = {
+                "title": action.title,
+                "target_weakness": action.target_weakness,
+                "action_type": action.action_type,
+                "notes": action.notes,
+            }
+            if action.is_completed:
+                completed_actions.append(entry)
+            else:
+                pending_actions.append(entry)
+
+    return {
+        "total_previous": len(interventions),
+        "completed_actions": completed_actions,
+        "pending_actions": pending_actions,
+        "latest_analysis": interventions[0].ai_analysis,
+    }
+
+
+def build_prompt(patterns: dict, previous: dict | None = None) -> str:
     failure_details = ""
     for round_type, data in patterns.get("failure_by_round_type", {}).items():
         failure_details += (
@@ -27,7 +63,7 @@ def build_prompt(patterns: dict) -> str:
 
     strengths = ", ".join(patterns.get("always_clears", [])) or "None identified"
 
-    return f"""You are a placement intervention advisor for an engineering college.
+    prompt = f"""You are a placement intervention advisor for an engineering college.
 
 Analyze this student's placement failure data and generate a personalized intervention plan.
 
@@ -66,6 +102,37 @@ Respond in this exact JSON format (no markdown, no extra text):
 
 Generate 3-5 specific, actionable recommendations. Be concrete — name specific platforms, topics, and time estimates. Prioritize by impact."""
 
+    if previous:
+        completed_lines = ""
+        for a in previous["completed_actions"]:
+            line = f"  - [{a['action_type']}] {a['title']} (targeted: {a['target_weakness']})"
+            if a["notes"]:
+                line += f" — Mentor notes: {a['notes']}"
+            completed_lines += line + "\n"
+
+        pending_lines = ""
+        for a in previous["pending_actions"]:
+            pending_lines += f"  - [{a['action_type']}] {a['title']} (targeted: {a['target_weakness']})\n"
+
+        completed_section = completed_lines if completed_lines else "  None yet.\n"
+        pending_section = pending_lines if pending_lines else "  None.\n"
+
+        prompt += f"""
+
+PREVIOUS INTERVENTION HISTORY ({previous['total_previous']} prior analysis):
+
+COMPLETED ACTIONS (mentor verified — student has worked on these):
+{completed_section}
+STILL PENDING ACTIONS (not yet completed):
+{pending_section}
+IMPORTANT INSTRUCTIONS FOR RE-ANALYSIS:
+- For weaknesses where the student completed actions: acknowledge the effort ("previously addressed") but if the weakness still appears in recent failure data, recommend reinforcement — do NOT repeat the same action.
+- For pending actions that are still relevant: keep them but update descriptions if needed.
+- Focus NEW recommendations on gaps not covered by previous interventions.
+- Clearly distinguish between "needs reinforcement" (worked on before) vs "new weakness" in your analysis."""
+
+    return prompt
+
 
 def parse_groq_response(raw: str) -> dict:
     cleaned = raw.strip()
@@ -99,7 +166,8 @@ def generate_intervention(db: Session, student_id: str, coordinator_id: str) -> 
     if patterns["total_drives_attempted"] == 0:
         raise ValueError("Student has no drive attempts to analyze")
 
-    prompt = build_prompt(patterns)
+    previous = get_previous_intervention_summary(db, student_id)
+    prompt = build_prompt(patterns, previous)
 
     try:
         client = Groq(api_key=settings.groq_api_key)

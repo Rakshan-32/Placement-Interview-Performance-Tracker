@@ -1,0 +1,39 @@
+- main [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e11]:
+        - heading "Mentor Workspace" [level=1] [ref=e12]
+        - paragraph [ref=e13]: Student Performance Tracking & Mentorship Management
+      - generic [ref=e14]:
+        - button "Overview" [ref=e15] [cursor=pointer]
+        - button "My Mentees (0)" [ref=e16] [cursor=pointer]
+        - button "Placed Mentees (0)" [ref=e17] [cursor=pointer]
+        - button "Interventions (0)" [ref=e18] [cursor=pointer]
+        - button "Performance Metrics" [ref=e19] [cursor=pointer]
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - generic [ref=e22]: M
+          - generic [ref=e23]: mentor@gmail.comMentor
+        - button "Sign Out" [ref=e24] [cursor=pointer]
+    - main [ref=e25]:
+      - generic [ref=e26]:
+        - generic [ref=e27]:
+          - generic [ref=e28]:
+            - text: Assigned Mentees
+            - heading "0" [level=3] [ref=e29]
+            - paragraph [ref=e30]: Active tracking
+          - generic [ref=e31]:
+            - text: Placed Students
+            - heading "0" [level=3] [ref=e32]
+            - paragraph [ref=e33]: 0% success rate
+          - generic [ref=e34]:
+            - text: Active Interventions
+            - heading "0" [level=3] [ref=e35]
+            - paragraph [ref=e36]: Requires monitoring
+          - generic [ref=e37]:
+            - text: At-Risk Students
+            - heading "0" [level=3] [ref=e38]
+            - paragraph [ref=e39]: High priority support
+        - generic [ref=e41]:
+          - heading "Mentee Roster & Quick Progress" [level=3] [ref=e42]
+          - button "View All Mentees →" [ref=e43] [cursor=pointer]

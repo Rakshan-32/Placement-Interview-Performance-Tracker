@@ -94,6 +94,39 @@ def init_db():
     """)
     conn.commit()
 
+    # Create interventions table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS interventions (
+            id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL,
+            student_gmail TEXT NOT NULL,
+            trigger_reason TEXT,
+            ai_analysis TEXT,
+            priority TEXT DEFAULT 'MEDIUM',
+            status TEXT DEFAULT 'GENERATED',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Create intervention_actions table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS intervention_actions (
+            id TEXT PRIMARY KEY,
+            intervention_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            action_type TEXT,
+            target_weakness TEXT,
+            priority_order INTEGER DEFAULT 1,
+            estimated_days INTEGER DEFAULT 14,
+            resources TEXT,
+            is_completed INTEGER DEFAULT 0,
+            notes TEXT,
+            FOREIGN KEY (intervention_id) REFERENCES interventions(id)
+        )
+    """)
+    conn.commit()
+
     # Seed demo users if empty
     cursor.execute("SELECT COUNT(*) as count FROM authenticate")
     row = cursor.fetchone()
@@ -101,6 +134,14 @@ def init_db():
         seed_users = [
             (str(uuid.uuid4()), "coordinator@gmail.com", "coord123", "Coordinator"),
             (str(uuid.uuid4()), "student@gmail.com", "student123", "Student"),
+            (str(uuid.uuid4()), "arun.kumar@gmail.com", "student123", "Student"),
+            (str(uuid.uuid4()), "bhavani.s@gmail.com", "student123", "Student"),
+            (str(uuid.uuid4()), "deepak.raj@gmail.com", "student123", "Student"),
+            (str(uuid.uuid4()), "divya.m@gmail.com", "student123", "Student"),
+            (str(uuid.uuid4()), "elango.p@gmail.com", "student123", "Student"),
+            (str(uuid.uuid4()), "fathima.z@gmail.com", "student123", "Student"),
+            (str(uuid.uuid4()), "gowtham.r@gmail.com", "student123", "Student"),
+            (str(uuid.uuid4()), "harini.v@gmail.com", "student123", "Student"),
             (str(uuid.uuid4()), "mentor@gmail.com", "mentor123", "Mentor"),
             (str(uuid.uuid4()), "department@gmail.com", "dept123", "Department"),
             (str(uuid.uuid4()), "dept.cse@gmail.com", "dept123", "Department"),
@@ -148,6 +189,26 @@ def init_db():
                 VALUES (?, ?, ?, ?)
             """, (str(uuid.uuid4()), "dept.cse@gmail.com", "dept123", "Department"))
             conn.commit()
+
+        # Ensure demo students exist
+        demo_students = [
+            "arun.kumar@gmail.com",
+            "bhavani.s@gmail.com",
+            "deepak.raj@gmail.com",
+            "divya.m@gmail.com",
+            "elango.p@gmail.com",
+            "fathima.z@gmail.com",
+            "gowtham.r@gmail.com",
+            "harini.v@gmail.com",
+        ]
+        for sg in demo_students:
+            cursor.execute("SELECT uuid FROM authenticate WHERE LOWER(gmail) = ?", (sg,))
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO authenticate (uuid, gmail, password, role) VALUES (?, ?, ?, ?)",
+                    (str(uuid.uuid4()), sg, "student123", "Student")
+                )
+        conn.commit()
 
         # Migrate/remove legacy Admin role records to Coordinator
         cursor.execute("UPDATE authenticate SET role = 'Coordinator' WHERE LOWER(role) = 'admin'")
@@ -805,6 +866,125 @@ def get_department_dashboard_data(dept_code="CSE"):
         "placed_students": placed_students,
         "interventions": interventions,
         "metrics": metrics
+    }
+
+
+def save_intervention(student_id, student_gmail, trigger_reason, ai_analysis, priority, recommendations):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    intv_id = str(uuid.uuid4())
+    cursor.execute(
+        "INSERT INTO interventions (id, student_id, student_gmail, trigger_reason, ai_analysis, priority) VALUES (?, ?, ?, ?, ?, ?)",
+        (intv_id, student_id, student_gmail, trigger_reason, ai_analysis, priority)
+    )
+    actions = []
+    for idx, rec in enumerate(recommendations):
+        action_id = str(uuid.uuid4())
+        resources_str = ", ".join(rec.get("resources", [])) if rec.get("resources") else ""
+        cursor.execute(
+            "INSERT INTO intervention_actions (id, intervention_id, title, description, action_type, target_weakness, priority_order, estimated_days, resources) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (action_id, intv_id, rec.get("title", ""), rec.get("description", ""), rec.get("action_type", ""), rec.get("target_weakness", ""), rec.get("priority_order", idx + 1), rec.get("estimated_days", 14), resources_str)
+        )
+        actions.append({
+            "id": action_id,
+            "title": rec.get("title", ""),
+            "description": rec.get("description", ""),
+            "action_type": rec.get("action_type", ""),
+            "target_weakness": rec.get("target_weakness", ""),
+            "priority_order": rec.get("priority_order", idx + 1),
+            "estimated_days": rec.get("estimated_days", 14),
+            "resources": resources_str,
+            "is_completed": False,
+            "notes": ""
+        })
+    conn.commit()
+    conn.close()
+    return {
+        "id": intv_id,
+        "student_id": student_id,
+        "student_gmail": student_gmail,
+        "trigger_reason": trigger_reason,
+        "ai_analysis": ai_analysis,
+        "priority": priority,
+        "status": "GENERATED",
+        "actions": actions
+    }
+
+
+def get_interventions_for_student(student_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM interventions WHERE student_id = ? ORDER BY created_at DESC", (student_id,))
+    rows = [dict(r) for r in cursor.fetchall()]
+    for intv in rows:
+        cursor.execute("SELECT * FROM intervention_actions WHERE intervention_id = ? ORDER BY priority_order", (intv["id"],))
+        intv["actions"] = [dict(a) for a in cursor.fetchall()]
+        for a in intv["actions"]:
+            a["is_completed"] = bool(a["is_completed"])
+    conn.close()
+    return rows
+
+
+def get_all_interventions():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM interventions ORDER BY created_at DESC")
+    rows = [dict(r) for r in cursor.fetchall()]
+    for intv in rows:
+        cursor.execute("SELECT * FROM intervention_actions WHERE intervention_id = ? ORDER BY priority_order", (intv["id"],))
+        intv["actions"] = [dict(a) for a in cursor.fetchall()]
+        for a in intv["actions"]:
+            a["is_completed"] = bool(a["is_completed"])
+    conn.close()
+    return rows
+
+
+def toggle_intervention_action(action_id, is_completed, notes=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if notes is not None:
+        cursor.execute("UPDATE intervention_actions SET is_completed = ?, notes = ? WHERE id = ?", (1 if is_completed else 0, notes, action_id))
+    else:
+        cursor.execute("UPDATE intervention_actions SET is_completed = ? WHERE id = ?", (1 if is_completed else 0, action_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_interventions_for_student(student_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM interventions WHERE student_id = ?", (student_id,))
+    intv_ids = [row["id"] for row in cursor.fetchall()]
+    for intv_id in intv_ids:
+        cursor.execute("DELETE FROM intervention_actions WHERE intervention_id = ?", (intv_id,))
+    cursor.execute("DELETE FROM interventions WHERE student_id = ?", (student_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_previous_interventions_summary(student_id):
+    interventions = get_interventions_for_student(student_id)
+    if not interventions:
+        return None
+    completed_actions = []
+    pending_actions = []
+    for intv in interventions:
+        for action in intv["actions"]:
+            entry = {
+                "title": action["title"],
+                "target_weakness": action["target_weakness"],
+                "action_type": action["action_type"],
+                "notes": action.get("notes", ""),
+            }
+            if action["is_completed"]:
+                completed_actions.append(entry)
+            else:
+                pending_actions.append(entry)
+    return {
+        "total_previous": len(interventions),
+        "completed_actions": completed_actions,
+        "pending_actions": pending_actions,
+        "latest_analysis": interventions[0]["ai_analysis"],
     }
 
 

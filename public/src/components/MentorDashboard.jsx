@@ -21,8 +21,12 @@ function MentorDashboard({ user, onLogout }) {
     // Rounds view modal
     const [viewRoundsStudent, setViewRoundsStudent] = React.useState(null);
     const [roundsHistory, setRoundsHistory] = React.useState([]);
-    
+
     const [toastMessage, setToastMessage] = React.useState('');
+
+    // AI Intervention generation state
+    const [generating, setGenerating] = React.useState(null);
+    const [generationError, setGenerationError] = React.useState(null);
 
     const showToast = (msg) => {
         setToastMessage(msg);
@@ -39,8 +43,46 @@ function MentorDashboard({ user, onLogout }) {
                 const data = await menteesRes.json();
                 setMentees(data.mentees || []);
                 setPlacedMentees(data.placed_mentees || []);
-                setInterventions(data.interventions || []);
                 setMetrics(data.metrics || null);
+
+                // Fetch persisted AI interventions from DB
+                try {
+                    const intvRes = await fetch('/api/interventions');
+                    if (intvRes.ok) {
+                        const intvData = await intvRes.json();
+                        const allDb = (intvData.interventions || []).map(intv => ({
+                            id: intv.id,
+                            student_id: intv.student_id,
+                            student_name: (data.mentees || []).find(m => m.student_id === intv.student_id)?.name || intv.student_gmail.split('@')[0].replace('.', ' '),
+                            register_number: (data.mentees || []).find(m => m.student_id === intv.student_id)?.register_number || '',
+                            title: 'AI-Generated Intervention Plan',
+                            priority: intv.priority,
+                            status: intv.status,
+                            ai_analysis: intv.ai_analysis,
+                            trigger_reason: intv.trigger_reason,
+                            actions: (intv.actions || []).map(a => ({
+                                id: a.id,
+                                text: a.title,
+                                description: a.description,
+                                action_type: a.action_type,
+                                target_weakness: a.target_weakness,
+                                completed: a.is_completed,
+                                notes: a.notes
+                            }))
+                        }));
+                        const seen = new Set();
+                        const dbInterventions = allDb.filter(i => {
+                            if (seen.has(i.student_id)) return false;
+                            seen.add(i.student_id);
+                            return true;
+                        });
+                        setInterventions(dbInterventions);
+                    } else {
+                        setInterventions(data.interventions || []);
+                    }
+                } catch (e) {
+                    setInterventions(data.interventions || []);
+                }
             } else {
                 // Fallback demo dataset if API not fully initialized
                 const demoMentees = [
@@ -191,6 +233,55 @@ function MentorDashboard({ user, onLogout }) {
             return { ...intv, actions: updatedActions };
         }));
         showToast('Action item progress updated!');
+    };
+
+    // Generate AI Intervention
+    const handleGenerateIntervention = async (student) => {
+        setGenerating(student.student_id);
+        setGenerationError(null);
+        try {
+            const res = await fetch('/api/intervention/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    student_id: student.student_id,
+                    student_gmail: student.email
+                })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                const intv = data.intervention;
+                const newIntv = {
+                    id: intv.id,
+                    student_id: intv.student_id,
+                    student_name: student.name,
+                    register_number: student.register_number,
+                    title: 'AI-Generated Intervention Plan',
+                    priority: intv.priority,
+                    status: intv.status,
+                    ai_analysis: intv.ai_analysis,
+                    trigger_reason: intv.trigger_reason,
+                    actions: (intv.actions || []).map(a => ({
+                        id: a.id,
+                        text: a.title,
+                        description: a.description,
+                        action_type: a.action_type,
+                        target_weakness: a.target_weakness,
+                        completed: false,
+                        notes: ''
+                    }))
+                };
+                setInterventions(prev => [newIntv, ...prev.filter(i => i.student_id !== student.student_id)]);
+                showToast(`AI analysis generated for ${student.name}!`);
+            } else {
+                setGenerationError(data.message || 'Failed to generate intervention');
+                setTimeout(() => setGenerationError(null), 6000);
+            }
+        } catch (err) {
+            setGenerationError('Failed to connect to AI service');
+            setTimeout(() => setGenerationError(null), 6000);
+        }
+        setGenerating(null);
     };
 
     // View Student Rounds
@@ -477,46 +568,114 @@ function MentorDashboard({ user, onLogout }) {
                 {/* TAB 4: INTERVENTIONS */}
                 {activeTab === 'interventions' && (
                     <div className="card" style={{ background: '#1e293b', padding: '24px', borderRadius: '10px', border: '1px solid #334155' }}>
-                        <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', marginBottom: '8px' }}>Active Intervention Workflows</h3>
-                        <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '20px' }}>Targeted learning plans and action steps assigned to mentees.</p>
+                        <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', marginBottom: '8px' }}>Student Performance Analysis</h3>
+                        <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '20px' }}>AI-powered analysis of student placement performance with personalized recommendations.</p>
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            {interventions.map(intv => (
-                                <div key={intv.id} style={{ background: '#0f172a', padding: '20px', borderRadius: '10px', border: '1px solid #334155' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                                        <div>
-                                            <span style={{ 
-                                                background: intv.priority === 'HIGH' || intv.priority === 'CRITICAL' ? 'rgba(239,68,68,0.2)' : 'rgba(245,158,11,0.2)',
-                                                color: intv.priority === 'HIGH' || intv.priority === 'CRITICAL' ? '#f87171' : '#fbbf24',
-                                                padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold'
-                                            }}>
-                                                {intv.priority} PRIORITY
-                                            </span>
-                                            <h4 style={{ color: '#f8fafc', fontSize: '1.1rem', marginTop: '6px' }}>{intv.title}</h4>
-                                            <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Student: <strong>{intv.student_name}</strong> ({intv.register_number})</p>
-                                        </div>
-                                    </div>
+                        {generationError && (
+                            <div style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px', color: '#f87171', fontSize: '0.875rem' }}>
+                                {generationError}
+                            </div>
+                        )}
+                        {generating && (
+                            <div style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px', color: '#fbbf24', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ display: 'inline-block', width: '16px', height: '16px', border: '2px solid #fbbf24', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
+                                Running AI analysis... This may take a few seconds.
+                            </div>
+                        )}
 
-                                    <div style={{ marginTop: '16px' }}>
-                                        <h5 style={{ color: '#cbd5e1', fontSize: '0.875rem', marginBottom: '8px' }}>Action Items Checklist:</h5>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            {intv.actions.map(act => (
-                                                <label key={act.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#1e293b', padding: '10px 14px', borderRadius: '6px', cursor: 'pointer' }}>
-                                                    <input 
-                                                        type="checkbox"
-                                                        checked={act.completed}
-                                                        onChange={() => handleToggleAction(intv.id, act.id)}
-                                                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                                                    />
-                                                    <span style={{ color: act.completed ? '#94a3b8' : '#f8fafc', textDecoration: act.completed ? 'line-through' : 'none' }}>
-                                                        {act.text}
-                                                    </span>
-                                                </label>
-                                            ))}
+                        {/* All Students List */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {mentees.map(m => {
+                                const intv = interventions.find(i => i.student_id === m.student_id);
+                                const isGenerating = generating === m.student_id;
+                                return (
+                                    <div key={m.student_id} style={{ background: '#0f172a', borderRadius: '10px', border: '1px solid #334155', overflow: 'hidden' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', flexWrap: 'wrap', gap: '8px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: intv ? '#1e40af' : '#334155', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.85rem', flexShrink: 0 }}>
+                                                    {m.name?.charAt(0) || '?'}
+                                                </div>
+                                                <div>
+                                                    <span style={{ color: '#f8fafc', fontWeight: '600' }}>{m.name}</span>
+                                                    <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '2px' }}>
+                                                        {m.register_number} &bull; {m.department} &bull; CGPA: {m.cgpa}
+                                                        <span style={{
+                                                            marginLeft: '8px',
+                                                            padding: '1px 8px',
+                                                            borderRadius: '10px',
+                                                            fontSize: '0.7rem',
+                                                            fontWeight: '600',
+                                                            background: m.status === 'Placed' ? 'rgba(16,185,129,0.2)' : m.status === 'At Risk' ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.2)',
+                                                            color: m.status === 'Placed' ? '#34d399' : m.status === 'At Risk' ? '#f87171' : '#60a5fa'
+                                                        }}>{m.status}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                {intv && (
+                                                    <span style={{
+                                                        padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold',
+                                                        background: intv.priority === 'HIGH' || intv.priority === 'CRITICAL' ? 'rgba(239,68,68,0.2)' : intv.priority === 'MEDIUM' ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.2)',
+                                                        color: intv.priority === 'HIGH' || intv.priority === 'CRITICAL' ? '#f87171' : intv.priority === 'MEDIUM' ? '#fbbf24' : '#60a5fa'
+                                                    }}>{intv.priority}</span>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    disabled={isGenerating}
+                                                    onClick={() => handleGenerateIntervention(m)}
+                                                    style={{
+                                                        padding: '6px 14px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: '600', border: 'none', cursor: isGenerating ? 'wait' : 'pointer',
+                                                        background: intv ? 'rgba(245,158,11,0.15)' : '#2563eb',
+                                                        color: intv ? '#fbbf24' : '#fff',
+                                                        borderWidth: intv ? '1px' : '0',
+                                                        borderStyle: 'solid',
+                                                        borderColor: intv ? 'rgba(245,158,11,0.4)' : 'transparent',
+                                                        opacity: isGenerating ? 0.5 : 1
+                                                    }}
+                                                >
+                                                    {isGenerating ? 'Analyzing...' : intv ? 'Re-analyze' : 'Run Analysis'}
+                                                </button>
+                                            </div>
                                         </div>
+
+                                        {intv && (
+                                            <div style={{ borderTop: '1px solid #334155', padding: '16px 18px' }}>
+                                                {intv.ai_analysis && (
+                                                    <div style={{ background: 'rgba(59,130,246,0.08)', padding: '12px', borderRadius: '6px', marginBottom: '14px', border: '1px solid rgba(59,130,246,0.15)' }}>
+                                                        <h5 style={{ color: '#60a5fa', fontSize: '0.7rem', textTransform: 'uppercase', marginBottom: '4px', letterSpacing: '0.5px' }}>AI Analysis</h5>
+                                                        <p style={{ color: '#cbd5e1', fontSize: '0.85rem', lineHeight: '1.5' }}>{intv.ai_analysis}</p>
+                                                    </div>
+                                                )}
+                                                <h5 style={{ color: '#94a3b8', fontSize: '0.8rem', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Action Items</h5>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    {intv.actions.map(act => (
+                                                        <label key={act.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', background: '#1e293b', padding: '10px 14px', borderRadius: '6px', cursor: 'pointer' }}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={act.completed}
+                                                                onChange={() => handleToggleAction(intv.id, act.id)}
+                                                                style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '2px', flexShrink: 0 }}
+                                                            />
+                                                            <div style={{ flex: 1 }}>
+                                                                <span style={{ color: act.completed ? '#64748b' : '#f8fafc', textDecoration: act.completed ? 'line-through' : 'none', fontWeight: '500', fontSize: '0.875rem' }}>
+                                                                    {act.text}
+                                                                </span>
+                                                                {act.description && <p style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: '2px' }}>{act.description}</p>}
+                                                                {(act.action_type || act.target_weakness) && (
+                                                                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                                                                        {act.action_type && <span style={{ background: 'rgba(99,102,241,0.15)', color: '#818cf8', padding: '1px 6px', borderRadius: '4px', fontSize: '0.68rem' }}>{act.action_type}</span>}
+                                                                        {act.target_weakness && <span style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24', padding: '1px 6px', borderRadius: '4px', fontSize: '0.68rem' }}>Target: {act.target_weakness}</span>}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                 )}
@@ -577,6 +736,53 @@ function MentorDashboard({ user, onLogout }) {
                                 <div>12th Percentage: <strong style={{ color: '#fff' }}>{selectedStudent.twelfth}%</strong></div>
                                 <div style={{ gridColumn: 'span 2' }}>Email: <strong style={{ color: '#fff' }}>{selectedStudent.email}</strong></div>
                             </div>
+                        </div>
+
+                        {/* AI Intervention Section */}
+                        <div style={{ marginTop: '24px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <h4 style={{ color: '#f8fafc', fontSize: '1.1rem' }}>AI Intervention Analysis</h4>
+                                <button
+                                    type="button"
+                                    disabled={generating === selectedStudent.student_id}
+                                    onClick={() => handleGenerateIntervention(selectedStudent)}
+                                    style={{ padding: '6px 14px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(245,158,11,0.4)', cursor: generating === selectedStudent.student_id ? 'wait' : 'pointer', background: 'rgba(245,158,11,0.15)', color: '#fbbf24', opacity: generating === selectedStudent.student_id ? 0.5 : 1 }}
+                                >
+                                    {generating === selectedStudent.student_id ? 'Analyzing...' : 'Run Analysis'}
+                                </button>
+                            </div>
+                            {generationError && generating === null && (
+                                <div style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', padding: '8px 12px', marginBottom: '10px', color: '#f87171', fontSize: '0.8rem' }}>
+                                    {generationError}
+                                </div>
+                            )}
+                            {(() => {
+                                const intv = interventions.find(i => i.student_id === selectedStudent.student_id);
+                                if (!intv) {
+                                    return <p style={{ color: '#64748b', fontSize: '0.85rem' }}>No AI analysis generated yet. Click "Run Analysis" to generate one.</p>;
+                                }
+                                return (
+                                    <div style={{ background: '#1e293b', padding: '14px', borderRadius: '8px', border: '1px solid #334155' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                                            <span style={{
+                                                background: intv.priority === 'HIGH' || intv.priority === 'CRITICAL' ? 'rgba(239,68,68,0.2)' : 'rgba(245,158,11,0.2)',
+                                                color: intv.priority === 'HIGH' || intv.priority === 'CRITICAL' ? '#f87171' : '#fbbf24',
+                                                padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold'
+                                            }}>{intv.priority}</span>
+                                            <span style={{ background: 'rgba(99,102,241,0.15)', color: '#818cf8', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem' }}>{intv.status}</span>
+                                        </div>
+                                        {intv.ai_analysis && <p style={{ color: '#cbd5e1', fontSize: '0.8rem', marginBottom: '8px' }}>{intv.ai_analysis}</p>}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                            {intv.actions.map(a => (
+                                                <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem' }}>
+                                                    <span style={{ color: a.completed ? '#34d399' : '#94a3b8' }}>{a.completed ? '✓' : '○'}</span>
+                                                    <span style={{ color: a.completed ? '#94a3b8' : '#f8fafc', textDecoration: a.completed ? 'line-through' : 'none' }}>{a.text}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                         </div>
 
                         {/* Mentor Notes Interactive CRUD Section */}

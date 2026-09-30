@@ -1,0 +1,134 @@
+- main [ref=f3e4]:
+  - generic [ref=f3e5]:
+    - generic [ref=f3e6]:
+      - generic [ref=f3e11]:
+        - heading "Mentor Workspace" [level=1] [ref=f3e12]
+        - paragraph [ref=f3e13]: Student Performance Tracking & Mentorship Management
+      - generic [ref=f3e14]:
+        - button "Overview" [ref=f3e15] [cursor=pointer]
+        - button "My Mentees (9)" [ref=f3e44] [cursor=pointer]
+        - button "Placed Mentees (0)" [ref=f3e17] [cursor=pointer]
+        - button "Interventions (1)" [active] [ref=f3e45] [cursor=pointer]
+        - button "Performance Metrics" [ref=f3e19] [cursor=pointer]
+      - generic [ref=f3e20]:
+        - generic [ref=f3e21]:
+          - generic [ref=f3e22]: M
+          - generic [ref=f3e23]: mentor@gmail.comMentor
+        - button "Sign Out" [ref=f3e24] [cursor=pointer]
+    - main [ref=f3e25]:
+      - generic [ref=f3e105]:
+        - heading "Student Performance Analysis" [level=3] [ref=f3e106]
+        - paragraph [ref=f3e107]: AI-powered analysis of student placement performance with personalized recommendations.
+        - generic [ref=f3e108]:
+          - generic [ref=f3e109]:
+            - generic [ref=f3e110]:
+              - generic [ref=f3e111]:
+                - generic [ref=f3e112]: S
+                - generic [ref=f3e113]:
+                  - text: Student
+                  - generic [ref=f3e114]: "312321104001 • CSE • CGPA: 7.5Active"
+              - generic [ref=f3e115]:
+                - generic [ref=f3e116]: LOW
+                - button "Re-analyze" [ref=f3e117] [cursor=pointer]
+            - generic [ref=f3e118]:
+              - generic [ref=f3e119]:
+                - heading "AI Analysis" [level=5] [ref=f3e120]
+                - paragraph [ref=f3e121]: Student has not yet attempted any placement drives, indicating a lack of exposure to interview processes and industry expectations. The absence of failure data suggests that the root issue is a foundational gap in technical depth, personal branding, and interview readiness rather than specific skill deficiencies.
+              - heading "Action Items" [level=5] [ref=f3e122]
+              - generic [ref=f3e123]:
+                - generic [ref=f3e124] [cursor=pointer]:
+                  - 'checkbox "Open-Source Contribution Sprint Select a beginner-friendly open-source project on GitHub (e.g., First Contributions or a small Python library) and commit at least 5 pull requests over 30 days. This will build real-world coding experience, demonstrate collaboration, and provide tangible portfolio items for recruiters. Project Development Target: Lack of demonstrable experience & technical depth" [ref=f3e125]'
+                  - generic [ref=f3e126]:
+                    - text: Open-Source Contribution Sprint
+                    - paragraph [ref=f3e127]: Select a beginner-friendly open-source project on GitHub (e.g., First Contributions or a small Python library) and commit at least 5 pull requests over 30 days. This will build real-world coding experience, demonstrate collaboration, and provide tangible portfolio items for recruiters.
+                    - generic [ref=f3e128]:
+                      - generic [ref=f3e129]: Project Development
+                      - generic [ref=f3e130]: "Target: Lack of demonstrable experience & technical depth"
+                - generic [ref=f3e131] [cursor=pointer]:
+                  - 'checkbox "System Design Fundamentals Course Enroll in a structured online course (e.g., Coursera''s \"Scalable Microservices with Kubernetes\" or Udemy''s \"System Design Interview – Grokking the System Design Process\") and complete all modules in 21 days. Focus on core concepts like load balancing, caching, database sharding, and API design. Practice Set Target: Technical depth & interview readiness" [ref=f3e132]'
+                  - generic [ref=f3e133]:
+                    - text: System Design Fundamentals Course
+                    - paragraph [ref=f3e134]: Enroll in a structured online course (e.g., Coursera's "Scalable Microservices with Kubernetes" or Udemy's "System Design Interview – Grokking the System Design Process") and complete all modules in 21 days. Focus on core concepts like load balancing, caching, database sharding, and API design.
+                    - generic [ref=f3e135]:
+                      - generic [ref=f3e136]: Practice Set
+                      - generic [ref=f3e137]: "Target: Technical depth & interview readiness"
+                - generic [ref=f3e138] [cursor=pointer]:
+                  - 'checkbox "Personal Branding via Medium Articles Write and publish 3 Medium posts (each 800–1200 words) on topics like \"My First Data Structures Project\", \"Understanding Binary Search Trees\", and \"Learning System Design\" within 14 days. This showcases communication skills, technical knowledge, and personal initiative. Resource Target: Personal branding & communication" [ref=f3e139]'
+                  - generic [ref=f3e140]:
+                    - text: Personal Branding via Medium Articles
+                    - paragraph [ref=f3e141]: Write and publish 3 Medium posts (each 800–1200 words) on topics like "My First Data Structures Project", "Understanding Binary Search Trees", and "Learning System Design" within 14 days. This showcases communication skills, technical knowledge, and personal initiative.
+                    - generic [ref=f3e142]:
+                      - generic [ref=f3e143]: Resource
+                      - generic [ref=f3e144]: "Target: Personal branding & communication"
+                - generic [ref=f3e145] [cursor=pointer]:
+                  - 'checkbox "Industry Meetup & Webinar Attendance Identify and attend 2 local or virtual tech meetups/webinars (e.g., on emerging AI tools or cloud services) within the next 7 days. Engage in Q&A sessions and network with speakers to build industry connections and stay updated on hiring trends. Workshop/Mentor Session Target: Networking & industry knowledge" [ref=f3e146]'
+                  - generic [ref=f3e147]:
+                    - text: Industry Meetup & Webinar Attendance
+                    - paragraph [ref=f3e148]: Identify and attend 2 local or virtual tech meetups/webinars (e.g., on emerging AI tools or cloud services) within the next 7 days. Engage in Q&A sessions and network with speakers to build industry connections and stay updated on hiring trends.
+                    - generic [ref=f3e149]:
+                      - generic [ref=f3e150]: Workshop/Mentor Session
+                      - generic [ref=f3e151]: "Target: Networking & industry knowledge"
+                - generic [ref=f3e152] [cursor=pointer]:
+                  - 'checkbox "Soft Skills Video Series Complete a 7‑day intensive video series on communication, negotiation, and interview etiquette (e.g., LinkedIn Learning’s \"Interviewing: How to Prepare for a Technical Interview\" and Coursera’s \"Successful Interviewing Skills for Engineers\"). Practice key techniques in mock scenarios. Workshop Target: Communication & negotiation" [ref=f3e153]'
+                  - generic [ref=f3e154]:
+                    - text: Soft Skills Video Series
+                    - paragraph [ref=f3e155]: "Complete a 7‑day intensive video series on communication, negotiation, and interview etiquette (e.g., LinkedIn Learning’s \"Interviewing: How to Prepare for a Technical Interview\" and Coursera’s \"Successful Interviewing Skills for Engineers\"). Practice key techniques in mock scenarios."
+                    - generic [ref=f3e156]:
+                      - generic [ref=f3e157]: Workshop
+                      - generic [ref=f3e158]: "Target: Communication & negotiation"
+          - generic [ref=f3e160]:
+            - generic [ref=f3e161]:
+              - generic [ref=f3e162]: A
+              - generic [ref=f3e163]:
+                - text: Arun Kumar
+                - generic [ref=f3e164]: "312321104002 • ECE • CGPA: 7.6Active"
+            - button "Run Analysis" [ref=f3e166] [cursor=pointer]
+          - generic [ref=f3e168]:
+            - generic [ref=f3e169]:
+              - generic [ref=f3e170]: B
+              - generic [ref=f3e171]:
+                - text: Bhavani S
+                - generic [ref=f3e172]: "312321104003 • IT • CGPA: 7.7Active"
+            - button "Run Analysis" [ref=f3e174] [cursor=pointer]
+          - generic [ref=f3e176]:
+            - generic [ref=f3e177]:
+              - generic [ref=f3e178]: D
+              - generic [ref=f3e179]:
+                - text: Deepak Raj
+                - generic [ref=f3e180]: "312321104004 • AIDS • CGPA: 7.8Active"
+            - button "Run Analysis" [ref=f3e182] [cursor=pointer]
+          - generic [ref=f3e184]:
+            - generic [ref=f3e185]:
+              - generic [ref=f3e186]: D
+              - generic [ref=f3e187]:
+                - text: Divya M
+                - generic [ref=f3e188]: "312321104005 • EEE • CGPA: 7.9Active"
+            - button "Run Analysis" [ref=f3e190] [cursor=pointer]
+          - generic [ref=f3e192]:
+            - generic [ref=f3e193]:
+              - generic [ref=f3e194]: E
+              - generic [ref=f3e195]:
+                - text: Elango P
+                - generic [ref=f3e196]: "312321104006 • CSE • CGPA: 8Active"
+            - button "Run Analysis" [ref=f3e198] [cursor=pointer]
+          - generic [ref=f3e200]:
+            - generic [ref=f3e201]:
+              - generic [ref=f3e202]: F
+              - generic [ref=f3e203]:
+                - text: Fathima Z
+                - generic [ref=f3e204]: "312321104007 • ECE • CGPA: 8.1Active"
+            - button "Run Analysis" [ref=f3e206] [cursor=pointer]
+          - generic [ref=f3e208]:
+            - generic [ref=f3e209]:
+              - generic [ref=f3e210]: G
+              - generic [ref=f3e211]:
+                - text: Gowtham R
+                - generic [ref=f3e212]: "312321104008 • IT • CGPA: 8.2Active"
+            - button "Run Analysis" [ref=f3e214] [cursor=pointer]
+          - generic [ref=f3e216]:
+            - generic [ref=f3e217]:
+              - generic [ref=f3e218]: H
+              - generic [ref=f3e219]:
+                - text: Harini V
+                - generic [ref=f3e220]: "312321104009 • AIDS • CGPA: 8.3Active"
+            - button "Run Analysis" [ref=f3e222] [cursor=pointer]

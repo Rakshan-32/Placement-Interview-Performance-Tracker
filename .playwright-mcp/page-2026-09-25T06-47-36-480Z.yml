@@ -1,0 +1,77 @@
+- main [ref=f1e4]:
+  - generic [ref=f1e5]:
+    - generic [ref=f1e6]:
+      - generic [ref=f1e11]:
+        - heading "Mentor Workspace" [level=1] [ref=f1e12]
+        - paragraph [ref=f1e13]: Student Performance Tracking & Mentorship Management
+      - generic [ref=f1e14]:
+        - button "Overview" [ref=f1e15] [cursor=pointer]
+        - button "My Mentees (1)" [ref=f1e44] [cursor=pointer]
+        - button "Placed Mentees (0)" [ref=f1e17] [cursor=pointer]
+        - button "Interventions (1)" [active] [ref=f1e45] [cursor=pointer]
+        - button "Performance Metrics" [ref=f1e19] [cursor=pointer]
+      - generic [ref=f1e20]:
+        - generic [ref=f1e21]:
+          - generic [ref=f1e22]: M
+          - generic [ref=f1e23]: mentor@gmail.comMentor
+        - button "Sign Out" [ref=f1e24] [cursor=pointer]
+    - main [ref=f1e25]:
+      - generic [ref=f1e63]:
+        - heading "Student Performance Analysis" [level=3] [ref=f1e64]
+        - paragraph [ref=f1e65]: AI-powered analysis of student placement performance with personalized recommendations.
+        - generic [ref=f1e67]:
+          - generic [ref=f1e68]:
+            - generic [ref=f1e69]:
+              - generic [ref=f1e70]: S
+              - generic [ref=f1e71]:
+                - text: Student
+                - generic [ref=f1e72]: "312321104001 • CSE • CGPA: 7.5Active"
+            - generic [ref=f1e73]:
+              - generic [ref=f1e74]: LOW
+              - button "Re-analyze" [ref=f1e75] [cursor=pointer]
+          - generic [ref=f1e76]:
+            - generic [ref=f1e77]:
+              - heading "AI Analysis" [level=5] [ref=f1e78]
+              - paragraph [ref=f1e79]: Student has not yet attempted any placement drives, indicating a lack of exposure to the interview process and industry expectations. The root cause appears to be insufficient practical experience, limited technical depth, and a weak personal brand, which together hinder confidence and readiness for competitive placements.
+            - heading "Action Items" [level=5] [ref=f1e80]
+            - generic [ref=f1e81]:
+              - generic [ref=f1e82] [cursor=pointer]:
+                - 'checkbox "Build a Personal Project Portfolio Develop a small but complete web or mobile application that solves a real-world problem. Host the code on GitHub, write a detailed README, and deploy the app using a free platform like Vercel or Netlify. This demonstrates practical skills, initiative, and the ability to deliver end-to-end solutions. Project Development Target: Lack of demonstrable experience" [ref=f1e83]'
+                - generic [ref=f1e84]:
+                  - text: Build a Personal Project Portfolio
+                  - paragraph [ref=f1e85]: Develop a small but complete web or mobile application that solves a real-world problem. Host the code on GitHub, write a detailed README, and deploy the app using a free platform like Vercel or Netlify. This demonstrates practical skills, initiative, and the ability to deliver end-to-end solutions.
+                  - generic [ref=f1e86]:
+                    - generic [ref=f1e87]: Project Development
+                    - generic [ref=f1e88]: "Target: Lack of demonstrable experience"
+              - generic [ref=f1e89] [cursor=pointer]:
+                - 'checkbox "Enroll in a Data Structures & Algorithms Crash Course Complete the ''Data Structures and Algorithms'' specialization on Coursera (offered by University of California San Diego). Focus on core topics like trees, graphs, dynamic programming, and complexity analysis. Allocate 3-4 hours per week for 14 days to solidify concepts and improve coding speed. Practice Set Target: Technical depth" [ref=f1e90]'
+                - generic [ref=f1e91]:
+                  - text: Enroll in a Data Structures & Algorithms Crash Course
+                  - paragraph [ref=f1e92]: Complete the 'Data Structures and Algorithms' specialization on Coursera (offered by University of California San Diego). Focus on core topics like trees, graphs, dynamic programming, and complexity analysis. Allocate 3-4 hours per week for 14 days to solidify concepts and improve coding speed.
+                  - generic [ref=f1e93]:
+                    - generic [ref=f1e94]: Practice Set
+                    - generic [ref=f1e95]: "Target: Technical depth"
+              - generic [ref=f1e96] [cursor=pointer]:
+                - 'checkbox "Participate in Hackathons Join at least one hackathon within the next 30 days (e.g., Hackerearth or Devpost). Work in a team to design, code, and present a solution under time pressure. This builds problem‑solving agility, teamwork, and a tangible showcase for recruiters. Practice Set Target: Problem solving under time constraints" [ref=f1e97]'
+                - generic [ref=f1e98]:
+                  - text: Participate in Hackathons
+                  - paragraph [ref=f1e99]: Join at least one hackathon within the next 30 days (e.g., Hackerearth or Devpost). Work in a team to design, code, and present a solution under time pressure. This builds problem‑solving agility, teamwork, and a tangible showcase for recruiters.
+                  - generic [ref=f1e100]:
+                    - generic [ref=f1e101]: Practice Set
+                    - generic [ref=f1e102]: "Target: Problem solving under time constraints"
+              - generic [ref=f1e103] [cursor=pointer]:
+                - 'checkbox "Attend a Technical Writing Workshop Enroll in the ''Technical Writing for Engineers'' course on LinkedIn Learning. Practice writing concise documentation, API specs, and project summaries. Strong written communication is critical for technical interviews and resume clarity. Workshop Target: Communication skills" [ref=f1e104]'
+                - generic [ref=f1e105]:
+                  - text: Attend a Technical Writing Workshop
+                  - paragraph [ref=f1e106]: Enroll in the 'Technical Writing for Engineers' course on LinkedIn Learning. Practice writing concise documentation, API specs, and project summaries. Strong written communication is critical for technical interviews and resume clarity.
+                  - generic [ref=f1e107]:
+                    - generic [ref=f1e108]: Workshop
+                    - generic [ref=f1e109]: "Target: Communication skills"
+              - generic [ref=f1e110] [cursor=pointer]:
+                - 'checkbox "Mock Interview with Alumni Network Schedule a 60‑minute mock interview session with a senior alumnus via the college alumni portal or LinkedIn. Focus on behavioral questions, system design, and coding problems. Use the feedback to refine answers and improve interview presence. Mock Interview Target: Interview confidence" [ref=f1e111]'
+                - generic [ref=f1e112]:
+                  - text: Mock Interview with Alumni Network
+                  - paragraph [ref=f1e113]: Schedule a 60‑minute mock interview session with a senior alumnus via the college alumni portal or LinkedIn. Focus on behavioral questions, system design, and coding problems. Use the feedback to refine answers and improve interview presence.
+                  - generic [ref=f1e114]:
+                    - generic [ref=f1e115]: Mock Interview
+                    - generic [ref=f1e116]: "Target: Interview confidence"

@@ -1,0 +1,32 @@
+- main [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - heading "Placement Portal (React)" [level=2] [ref=e11]
+      - paragraph [ref=e12]: Welcome back! Please sign in to your account.
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - generic [ref=e15]: Gmail Address
+        - textbox "Gmail Address" [ref=e21]:
+          - /placeholder: name@gmail.com
+      - generic [ref=e22]:
+        - generic [ref=e23]: Password
+        - generic [ref=e24]:
+          - textbox "Password" [ref=e29]:
+            - /placeholder: ••••••••
+          - button "Toggle Password Visibility" [ref=e30] [cursor=pointer]
+      - button "Sign In" [ref=e34] [cursor=pointer]
+    - generic [ref=e35]:
+      - generic [ref=e36]: "Quick Test Accounts (Click to autofill):"
+      - generic [ref=e37]:
+        - button "Coordinator coordinator@gmail.com" [ref=e38] [cursor=pointer]:
+          - generic [ref=e39]: Coordinator
+          - text: coordinator@gmail.com
+        - button "Mentor mentor@gmail.com" [ref=e40] [cursor=pointer]:
+          - generic [ref=e41]: Mentor
+          - text: mentor@gmail.com
+        - button "Department dept.cse@gmail.com" [ref=e42] [cursor=pointer]:
+          - generic [ref=e43]: Department
+          - text: dept.cse@gmail.com
+        - button "Student student@gmail.com" [ref=e44] [cursor=pointer]:
+          - generic [ref=e45]: Student
+          - text: student@gmail.com

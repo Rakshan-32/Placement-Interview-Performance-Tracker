@@ -508,6 +508,201 @@ async def get_department_dashboard(dept: str = "CSE"):
     }
 
 
+# ==========================================
+# INTERVENTION API ENDPOINTS
+# ==========================================
+
+class GenerateInterventionRequest(BaseModel):
+    student_id: str
+    student_gmail: str
+
+def build_intervention_prompt(student_name, dept, cgpa, results, previous=None):
+    failure_details = ""
+    weakness_areas = {}
+    for r in results:
+        res_str = (r.get("result") or "").lower()
+        if "rejected" in res_str or "failed" in res_str:
+            company = r.get("company_name", "Unknown")
+            failure_details += f"  - Failed at {company} ({r.get('job_role', 'Role')}) in round {r.get('round', 1)}\n"
+            weakness_areas["Technical Interview"] = weakness_areas.get("Technical Interview", 0) + 1
+
+    if not failure_details:
+        failure_details = "  No specific failures recorded yet.\n"
+
+    weakness_text = ""
+    for area, count in weakness_areas.items():
+        weakness_text += f"  - {area}: {count} occurrence(s)\n"
+    if not weakness_text:
+        weakness_text = "  Not enough data to identify specific weaknesses.\n"
+
+    prompt = f"""You are a placement intervention advisor for an engineering college.
+
+Analyze this student's placement data and generate a personalized intervention plan.
+
+STUDENT PROFILE:
+- Name: {student_name}
+- Department: {dept}
+- CGPA: {cgpa}
+- Total drives attempted: {len(results)}
+
+FAILURE DETAILS:
+{failure_details}
+IDENTIFIED WEAKNESS AREAS:
+{weakness_text}
+
+Respond in this exact JSON format (no markdown, no extra text):
+{{
+  "analysis": "A 2-3 sentence analysis of why this student is struggling and the root cause pattern",
+  "recommendations": [
+    {{
+      "title": "Short action title",
+      "description": "Detailed description of what the student should do",
+      "action_type": "Type of action (e.g., Practice Set, Mock Interview, Mentor Session, Workshop, Resource, Counseling)",
+      "target_weakness": "Which weakness this addresses",
+      "priority_order": 1,
+      "estimated_days": 14,
+      "resources": ["specific resource URLs or names"]
+    }}
+  ]
+}}
+
+Generate 3-5 specific, actionable recommendations. Be concrete — name specific platforms, topics, and time estimates. Prioritize by impact."""
+
+    if previous:
+        completed_lines = ""
+        for a in previous["completed_actions"]:
+            line = f"  - [{a['action_type']}] {a['title']} (targeted: {a['target_weakness']})"
+            if a["notes"]:
+                line += f" — Mentor notes: {a['notes']}"
+            completed_lines += line + "\n"
+
+        pending_lines = ""
+        for a in previous["pending_actions"]:
+            pending_lines += f"  - [{a['action_type']}] {a['title']} (targeted: {a['target_weakness']})\n"
+
+        completed_section = completed_lines if completed_lines else "  None yet.\n"
+        pending_section = pending_lines if pending_lines else "  None.\n"
+
+        prompt += f"""
+
+PREVIOUS INTERVENTION HISTORY ({previous['total_previous']} prior analysis):
+
+COMPLETED ACTIONS (mentor verified):
+{completed_section}
+STILL PENDING ACTIONS:
+{pending_section}
+IMPORTANT: Do NOT repeat completed actions. Focus on new gaps and reinforcement."""
+
+    return prompt
+
+@app.post("/api/intervention/generate")
+async def generate_intervention(req: GenerateInterventionRequest):
+    import json
+    import re
+    try:
+        from groq import Groq
+    except ImportError:
+        return JSONResponse(status_code=500, content={"success": False, "message": "Groq SDK not installed. Run: pip install groq"})
+
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+    GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
+
+    if not GROQ_API_KEY:
+        try:
+            env_path = os.path.join(os.path.dirname(__file__), "backend", ".env")
+            if os.path.exists(env_path):
+                with open(env_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("GROQ_API_KEY="):
+                            GROQ_API_KEY = line.split("=", 1)[1].strip()
+                        elif line.startswith("GROQ_MODEL="):
+                            GROQ_MODEL = line.split("=", 1)[1].strip()
+        except Exception:
+            pass
+
+    if not GROQ_API_KEY:
+        return JSONResponse(status_code=500, content={"success": False, "message": "GROQ_API_KEY not configured."})
+
+    student_results = db.get_student_drive_results(req.student_gmail)
+    mentor_data = db.get_mentor_dashboard_data("mentor@gmail.com")
+    student_info = None
+    for m in mentor_data.get("mentees", []):
+        if m["student_id"] == req.student_id or m["email"] == req.student_gmail:
+            student_info = m
+            break
+
+    student_name = student_info["name"] if student_info else req.student_gmail.split("@")[0].replace(".", " ").title()
+    dept = student_info["department"] if student_info else "CSE"
+    cgpa = student_info["cgpa"] if student_info else 7.5
+
+    previous = db.get_previous_interventions_summary(req.student_id)
+    prompt = build_intervention_prompt(student_name, dept, cgpa, student_results, previous)
+
+    db.delete_interventions_for_student(req.student_id)
+
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=2000,
+        )
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": f"AI API call failed: {str(e)}"})
+
+    raw_content = response.choices[0].message.content
+    try:
+        cleaned = raw_content.strip()
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
+        if match:
+            cleaned = match.group(1)
+        parsed = json.loads(cleaned)
+    except (json.JSONDecodeError, KeyError) as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": f"Failed to parse AI response: {str(e)}"})
+
+    total_failures = sum(1 for r in student_results if "rejected" in (r.get("result") or "").lower() or "failed" in (r.get("result") or "").lower())
+    if total_failures >= 4:
+        priority = "CRITICAL"
+    elif total_failures >= 3:
+        priority = "HIGH"
+    elif total_failures >= 2:
+        priority = "MEDIUM"
+    else:
+        priority = "LOW"
+
+    trigger_reason = f"AI analysis based on {len(student_results)} drive results ({total_failures} failures)"
+
+    intervention = db.save_intervention(
+        student_id=req.student_id,
+        student_gmail=req.student_gmail,
+        trigger_reason=trigger_reason,
+        ai_analysis=parsed.get("analysis", ""),
+        priority=priority,
+        recommendations=parsed.get("recommendations", [])
+    )
+
+    return {"success": True, "intervention": intervention}
+
+@app.get("/api/interventions")
+async def list_interventions():
+    return {"success": True, "interventions": db.get_all_interventions()}
+
+@app.get("/api/interventions/{student_id}")
+async def get_student_interventions(student_id: str):
+    return {"success": True, "interventions": db.get_interventions_for_student(student_id)}
+
+class ToggleActionRequest(BaseModel):
+    is_completed: bool
+    notes: str = None
+
+@app.patch("/api/intervention/actions/{action_id}")
+async def toggle_action(action_id: str, req: ToggleActionRequest):
+    db.toggle_intervention_action(action_id, req.is_completed, req.notes)
+    return {"success": True, "message": "Action updated"}
+
+
 # Serve static frontend files
 PUBLIC_DIR = os.path.join(os.path.dirname(__file__), "public")
 if os.path.exists(PUBLIC_DIR):
