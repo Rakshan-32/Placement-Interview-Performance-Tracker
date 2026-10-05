@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, status, Form, UploadFile, File
+from fastapi import FastAPI, HTTPException, status, Form, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -8,8 +8,12 @@ import uvicorn
 import io
 import csv
 import openpyxl
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 import db
+import intervention_service
 
 
 # Initialize database on startup
@@ -66,7 +70,8 @@ async def login(credentials: LoginRequest):
             "user": {
                 "uuid": user["uuid"],
                 "gmail": user["gmail"],
-                "role": user["role"]
+                "role": user["role"],
+                "department": user.get("department") or "CSE"
             }
         }
     )
@@ -185,12 +190,33 @@ async def upload_drive_results(drive_id: str, file: UploadFile = File(...)):
     
     gmail_idx = -1
     result_idx = -1
+    round_idx = -1
+    score_idx = -1
+    max_score_idx = -1
+    feedback_idx = -1
+    weakness_idx = -1
+    rejection_idx = -1
+    attempt_date_idx = -1
     
     for idx, col in enumerate(header):
         if col in ["gmail", "email", "student email", "student gmail", "mail", "gmail_id", "email_id", "student email id"]:
             gmail_idx = idx
         elif col in ["result", "status", "round result", "round_result", "verdict", "drive status", "drive_status", "state", "selection"]:
             result_idx = idx
+        elif col in ["round", "round number", "round_no", "round no"]:
+            round_idx = idx
+        elif col in ["score", "marks", "obtained marks"]:
+            score_idx = idx
+        elif col in ["max score", "maximum score", "total marks"]:
+            max_score_idx = idx
+        elif col in ["feedback", "remarks", "comments"]:
+            feedback_idx = idx
+        elif col in ["weakness", "weakness area", "weakness_area", "skill gap"]:
+            weakness_idx = idx
+        elif col in ["rejection reason", "rejection_reason", "failure reason"]:
+            rejection_idx = idx
+        elif col in ["attempt date", "attempt_date", "evaluation date", "date"]:
+            attempt_date_idx = idx
             
     if gmail_idx == -1:
         return JSONResponse(
@@ -219,7 +245,32 @@ async def upload_drive_results(drive_id: str, file: UploadFile = File(...)):
             result_val = None
 
         if result_val:
-            db.upsert_student_drive_result(drive_id, gmail_val, result_val)
+            def optional_float(index):
+                if index == -1 or len(row) <= index or not str(row[index]).strip():
+                    return None
+                try:
+                    return float(row[index])
+                except (TypeError, ValueError):
+                    return None
+
+            round_value = None
+            if round_idx != -1 and len(row) > round_idx:
+                try:
+                    round_value = int(float(row[round_idx]))
+                except (TypeError, ValueError):
+                    round_value = None
+            db.upsert_student_drive_result(
+                drive_id,
+                gmail_val,
+                result_val,
+                round_number=round_value,
+                score=optional_float(score_idx),
+                max_score=optional_float(max_score_idx),
+                feedback=str(row[feedback_idx]).strip() if feedback_idx != -1 and len(row) > feedback_idx else None,
+                weakness_area=str(row[weakness_idx]).strip() if weakness_idx != -1 and len(row) > weakness_idx else None,
+                rejection_reason=str(row[rejection_idx]).strip() if rejection_idx != -1 and len(row) > rejection_idx else None,
+                attempt_date=str(row[attempt_date_idx]).strip() if attempt_date_idx != -1 and len(row) > attempt_date_idx else None,
+            )
             updated_count += 1
             processed_records.append({"gmail": gmail_val, "result": result_val})
         else:
@@ -417,27 +468,232 @@ async def apply_student_drive(req: StudentApplyRequest):
 async def get_student_analysis(gmail: str):
     """viewAnalysis() — Performance & failure pattern analysis."""
     results = db.get_student_drive_results(gmail)
-    total_rounds = len(results)
-    passed = sum(1 for r in results if "Selected" in r.get("result", "") or "Shortlisted" in r.get("result", ""))
-    failed = sum(1 for r in results if "Rejected" in r.get("result", "") or "Failed" in r.get("result", ""))
-    
-    pass_rate = round((passed / total_rounds * 100), 1) if total_rounds > 0 else 100.0
-    risk_level = "high" if failed >= 3 else "medium" if failed >= 1 else "low"
+    patterns = intervention_service.analyse_student_patterns(results)
+    failed_rounds = patterns["failed_by_round"]
+    most_failed_round = max(failed_rounds, key=failed_rounds.get) if failed_rounds else None
 
     return {
         "success": True,
-        "pass_rate": pass_rate,
-        "total_drives_applied": len(set(r["drive_id"] for r in results)) if results else 3,
-        "total_rounds_attempted": total_rounds if total_rounds > 0 else 4,
-        "rounds_passed": passed if passed > 0 else 3,
-        "rounds_failed": failed,
-        "most_failed_round": "Technical Coding Round" if failed > 0 else "Aptitude Round",
-        "top_weaknesses": [
-            {"area": "Data Structures & Algorithms", "count": 2},
-            {"area": "Dynamic Programming", "count": 1}
-        ],
-        "risk_level": risk_level
+        "pass_rate": patterns["pass_rate"],
+        "total_drives_applied": len(set(r["drive_id"] for r in results)),
+        "total_rounds_attempted": patterns["total_rounds"],
+        "rounds_passed": patterns["passed_rounds"],
+        "rounds_failed": patterns["failed_rounds"],
+        "most_failed_round": most_failed_round,
+        "top_weaknesses": patterns["top_weaknesses"],
+        "risk_level": patterns["risk_level"]
     }
+
+
+# ==========================================
+# INTERVENTION AND FAILURE ANALYSIS API
+# ==========================================
+
+
+class InterventionGenerateRequest(BaseModel):
+    student_id: str = None
+    gmail: str = None
+
+
+class InterventionStatusRequest(BaseModel):
+    status: str
+
+
+class InterventionActionRequest(BaseModel):
+    completed: bool = None
+    notes: str = None
+
+
+def _requester(user_id: str, role: str, department: str):
+    if not user_id:
+        raise HTTPException(status_code=401, detail="X-User-Id is required")
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unknown user")
+    if role and role.strip().lower() != user["role"].strip().lower():
+        raise HTTPException(status_code=403, detail="User role does not match the authenticated account")
+    user["department"] = department or user.get("department") or "CSE"
+    return user
+
+
+def _scoped_student(user: dict, student_id: str = None, gmail: str = None):
+    students = db.get_students_for_scope(user["uuid"], user["role"], user.get("department"))
+    target = None
+    for student in students:
+        if (student_id and student["uuid"] == student_id) or (gmail and student["gmail"].lower() == gmail.strip().lower()):
+            target = student
+            break
+    if not target:
+        raise HTTPException(status_code=403, detail="You are not allowed to access this student")
+    return target
+
+
+def _visible_interventions(user: dict):
+    students = db.get_students_for_scope(user["uuid"], user["role"], user.get("department"))
+    return db.get_interventions(student_gmails=[student["gmail"] for student in students])
+
+
+@app.get("/api/interventions")
+async def list_interventions(
+    x_user_id: str = Header(None),
+    x_user_role: str = Header(None),
+    x_department: str = Header(None),
+):
+    user = _requester(x_user_id, x_user_role, x_department)
+    return {"success": True, "interventions": _visible_interventions(user)}
+
+
+@app.get("/api/interventions/students")
+async def list_intervention_students(
+    x_user_id: str = Header(None),
+    x_user_role: str = Header(None),
+    x_department: str = Header(None),
+):
+    user = _requester(x_user_id, x_user_role, x_department)
+    students = db.get_students_for_scope(user["uuid"], user["role"], user.get("department"))
+    visible_interventions = db.get_interventions(student_gmails=[student["gmail"] for student in students])
+    by_gmail = {}
+    for intervention in visible_interventions:
+        by_gmail.setdefault(intervention["student_gmail"].lower(), []).append(intervention)
+    for student in students:
+        student["interventions"] = by_gmail.get(student["gmail"].lower(), [])[:3]
+        student["intervention_count"] = len(student["interventions"])
+    return {"success": True, "students": students}
+
+
+@app.get("/api/interventions/{student_id}")
+async def get_student_interventions(
+    student_id: str,
+    x_user_id: str = Header(None),
+    x_user_role: str = Header(None),
+    x_department: str = Header(None),
+):
+    user = _requester(x_user_id, x_user_role, x_department)
+    student = _scoped_student(user, student_id=student_id)
+    return {
+        "success": True,
+        "student": student,
+        "interventions": db.get_interventions(student_gmail=student["gmail"]),
+        "analysis": intervention_service.analyse_student_patterns(db.get_student_analysis_records(student["gmail"])),
+    }
+
+
+@app.post("/api/interventions/generate")
+async def generate_intervention(
+    request: InterventionGenerateRequest,
+    x_user_id: str = Header(None),
+    x_user_role: str = Header(None),
+    x_department: str = Header(None),
+):
+    user = _requester(x_user_id, x_user_role, x_department)
+    if user["role"].strip().lower() == "student":
+        raise HTTPException(status_code=403, detail="Students cannot generate interventions")
+    if not request.student_id and not request.gmail:
+        raise HTTPException(status_code=400, detail="student_id or gmail is required")
+
+    student = _scoped_student(user, request.student_id, request.gmail)
+    records = db.get_student_analysis_records(student["gmail"])
+    patterns = intervention_service.analyse_student_patterns(records)
+    previous = db.get_interventions(student_gmail=student["gmail"])
+    previous_actions = [action for item in previous for action in item.get("actions", [])]
+
+    try:
+        intervention, actions = intervention_service.build_intervention(
+            student, patterns, previous_actions, user["uuid"]
+        )
+        saved = db.save_intervention(intervention, actions)
+    except intervention_service.AgentRateLimitError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except intervention_service.AgentConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except intervention_service.AgentResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Intervention generation failed: {exc}") from exc
+
+    return {"success": True, "intervention": saved, "analysis": patterns}
+
+
+@app.post("/api/interventions/generate-all")
+async def generate_all_interventions(
+    x_user_id: str = Header(None),
+    x_user_role: str = Header(None),
+    x_department: str = Header(None),
+):
+    user = _requester(x_user_id, x_user_role, x_department)
+    if user["role"].strip().lower() == "student":
+        raise HTTPException(status_code=403, detail="Students cannot generate interventions")
+
+    students = db.get_students_for_scope(user["uuid"], user["role"], user.get("department"))
+    generated = []
+    failures = []
+    for student in students:
+        records = db.get_student_analysis_records(student["gmail"])
+        patterns = intervention_service.analyse_student_patterns(records)
+        previous = db.get_interventions(student_gmail=student["gmail"])
+        previous_actions = [action for item in previous for action in item.get("actions", [])]
+        try:
+            intervention, actions = intervention_service.build_intervention(
+                student, patterns, previous_actions, user["uuid"]
+            )
+            generated.append(db.save_intervention(intervention, actions))
+        except intervention_service.AgentConfigurationError as exc:
+            failures.append({"student_id": student["uuid"], "gmail": student["gmail"], "error": str(exc)})
+        except intervention_service.AgentResponseError as exc:
+            failures.append({"student_id": student["uuid"], "gmail": student["gmail"], "error": str(exc)})
+        except Exception as exc:
+            failures.append({"student_id": student["uuid"], "gmail": student["gmail"], "error": f"Generation failed: {exc}"})
+
+    return {"success": len(failures) == 0, "generated": generated, "failures": failures}
+
+
+@app.patch("/api/interventions/{intervention_id}/status")
+async def change_intervention_status(
+    intervention_id: str,
+    request: InterventionStatusRequest,
+    x_user_id: str = Header(None),
+    x_user_role: str = Header(None),
+    x_department: str = Header(None),
+):
+    user = _requester(x_user_id, x_user_role, x_department)
+    if user["role"].strip().lower() == "student":
+        raise HTTPException(status_code=403, detail="Students cannot update intervention status")
+    allowed = {"OPEN", "IN_PROGRESS", "COMPLETED", "CANCELLED"}
+    new_status = request.status.strip().upper()
+    if new_status not in allowed:
+        raise HTTPException(status_code=400, detail=f"status must be one of {sorted(allowed)}")
+    visible = {item["id"] for item in _visible_interventions(user)}
+    if intervention_id not in visible:
+        raise HTTPException(status_code=403, detail="You are not allowed to update this intervention")
+    db.update_intervention_status(intervention_id, new_status)
+    return {"success": True, "status": new_status}
+
+
+@app.patch("/api/intervention/actions/{action_id}")
+async def change_intervention_action(
+    action_id: str,
+    request: InterventionActionRequest,
+    x_user_id: str = Header(None),
+    x_user_role: str = Header(None),
+    x_department: str = Header(None),
+):
+    user = _requester(x_user_id, x_user_role, x_department)
+    if user["role"].strip().lower() == "student":
+        raise HTTPException(status_code=403, detail="Students cannot update intervention actions")
+    visible_action_ids = {
+        action["id"]
+        for item in _visible_interventions(user)
+        for action in item.get("actions", [])
+    }
+    if action_id not in visible_action_ids:
+        raise HTTPException(status_code=403, detail="You are not allowed to update this action")
+    if not db.update_intervention_action(action_id, request.completed, request.notes):
+        raise HTTPException(status_code=404, detail="Action not found")
+    return {"success": True, "action_id": action_id}
 
 @app.post("/api/student/resume-upload")
 async def upload_student_resume(file: UploadFile = File(...), gmail: str = Form("student@gmail.com")):

@@ -1,3 +1,9 @@
+window.interventionHeaders = (user) => ({
+    'X-User-Id': user?.uuid || '',
+    'X-User-Role': user?.role || '',
+    'X-Department': user?.department || 'CSE'
+});
+
 function App() {
     // Restore session from browser localStorage if present
     const [currentUser, setCurrentUser] = React.useState(() => {

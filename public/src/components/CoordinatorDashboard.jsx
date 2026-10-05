@@ -14,7 +14,10 @@ function CoordinatorDashboard({ user, onLogout }) {
 
     const [drives, setDrives] = React.useState([]);
     const [loadingDrives, setLoadingDrives] = React.useState(true);
-    
+    const [interventions, setInterventions] = React.useState([]);
+    const [loadingInterventions, setLoadingInterventions] = React.useState(true);
+    const [activeTab, setActiveTab] = React.useState('drives');
+
     // Modal states
     const [isCreateModalOpen, setIsCreateModalOpen] = React.useState(false);
     const [isUploadModalOpen, setIsUploadModalOpen] = React.useState(false);
@@ -46,6 +49,56 @@ function CoordinatorDashboard({ user, onLogout }) {
         fetchDrives();
     }, [fetchDrives]);
 
+    const fetchInterventions = React.useCallback(async () => {
+        setLoadingInterventions(true);
+        try {
+            const res = await fetch('/api/interventions', {
+                headers: window.interventionHeaders(user)
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setInterventions(data.interventions || []);
+            }
+        } catch (err) {
+            console.error('Failed to fetch interventions:', err);
+        } finally {
+            setLoadingInterventions(false);
+        }
+    }, [user]);
+
+    React.useEffect(() => {
+        fetchInterventions();
+    }, [fetchInterventions]);
+
+    const updateInterventionStatus = async (interventionId, nextStatus) => {
+        const res = await fetch(`/api/interventions/${interventionId}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...window.interventionHeaders(user) },
+            body: JSON.stringify({ status: nextStatus })
+        });
+        if (res.ok) {
+            setInterventions(prev => prev.map(item => item.id === interventionId ? { ...item, status: nextStatus } : item));
+            setToastMessage(`Intervention marked ${nextStatus.toLowerCase()}.`);
+            setTimeout(() => setToastMessage(''), 3500);
+        }
+    };
+
+    const regenerateIntervention = async (studentGmail) => {
+        const res = await fetch('/api/interventions/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...window.interventionHeaders(user) },
+            body: JSON.stringify({ gmail: studentGmail })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            await fetchInterventions();
+            setToastMessage('Intervention generated successfully.');
+        } else {
+            setToastMessage(data.detail || 'Unable to generate intervention.');
+        }
+        setTimeout(() => setToastMessage(''), 3500);
+    };
+
     const handleDriveCreated = (newDrive) => {
         setDrives(prev => [newDrive, ...prev]);
         setToastMessage(`Drive for "${newDrive.company_name}" published successfully.`);
@@ -73,7 +126,7 @@ function CoordinatorDashboard({ user, onLogout }) {
         setIsViewModalOpen(true);
     };
 
-    const filteredDrives = drives.filter(d => 
+    const filteredDrives = drives.filter(d =>
         d.company_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         d.job_role.toLowerCase().includes(searchTerm.toLowerCase()) ||
         d.allowed_branches.toLowerCase().includes(searchTerm.toLowerCase())
@@ -94,6 +147,11 @@ function CoordinatorDashboard({ user, onLogout }) {
                         <span className="portal-name">Placement Management Portal</span>
                         <span className="portal-sub">Coordinator Workspace</span>
                     </div>
+                </div>
+
+                <div className="nav-tabs" style={{ display: 'flex', gap: '8px', marginLeft: '24px' }}>
+                    <button type="button" className={`tab-btn ${activeTab === 'drives' ? 'active' : ''}`} onClick={() => setActiveTab('drives')}>Placement Drives</button>
+                    <button type="button" className={`tab-btn ${activeTab === 'interventions' ? 'active' : ''}`} onClick={() => setActiveTab('interventions')}>Interventions ({interventions.length})</button>
                 </div>
 
                 <div className="nav-right">
@@ -146,6 +204,15 @@ function CoordinatorDashboard({ user, onLogout }) {
                         <span className="metric-title">Total Results Uploaded</span>
                     </div>
                 </div>
+
+                {activeTab === 'interventions' && (
+                    <InterventionRoster
+                        user={user}
+                        canGenerate={true}
+                        title="All Student Interventions"
+                        description="Expand any authorized student to inspect their intervention and action plan."
+                    />
+                )}
 
                 {/* Toolbar & Filter Bar */}
                 <div className="table-toolbar">

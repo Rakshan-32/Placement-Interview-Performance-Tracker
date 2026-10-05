@@ -1,5 +1,5 @@
 function StudentDashboard({ user, onLogout }) {
-    // Navigation Tabs: 'drives', 'results', 'applications', 'analysis', 'profile'
+    // Navigation Tabs: 'drives', 'results', 'applications', 'analysis', 'interventions', 'profile'
     const [activeTab, setActiveTab] = React.useState('drives');
 
     // Data states
@@ -7,8 +7,9 @@ function StudentDashboard({ user, onLogout }) {
     const [myResults, setMyResults] = React.useState([]);
     const [myApplications, setMyApplications] = React.useState([]);
     const [analysisData, setAnalysisData] = React.useState(null);
+    const [interventions, setInterventions] = React.useState([]);
     const [studentProfile, setStudentProfile] = React.useState(null);
-    
+
     // Resume Upload State
     const [resumeFile, setResumeFile] = React.useState(null);
     const [uploadingResume, setUploadingResume] = React.useState(false);
@@ -26,7 +27,7 @@ function StudentDashboard({ user, onLogout }) {
         setLoading(true);
         try {
             const gmail = user?.gmail || 'student@gmail.com';
-            
+
             // 1. Fetch drives
             const resDrives = await fetch('/api/drives');
             if (resDrives.ok) {
@@ -67,6 +68,16 @@ function StudentDashboard({ user, onLogout }) {
                     ],
                     risk_level: "low"
                 });
+            }
+
+            const resInterventions = await fetch(`/api/interventions/${encodeURIComponent(user?.uuid || '')}`, {
+                headers: window.interventionHeaders(user)
+            });
+            if (resInterventions.ok) {
+                const interventionData = await resInterventions.json();
+                setInterventions(interventionData.interventions || []);
+            } else {
+                setInterventions([]);
             }
 
             // Default profile
@@ -169,15 +180,15 @@ function StudentDashboard({ user, onLogout }) {
     };
 
     // Derived Placement Status
-    const placedResult = myResults.find(r => 
-        (r.result || '').toLowerCase().includes('selected') || 
-        (r.result || '').toLowerCase().includes('placed') || 
+    const placedResult = myResults.find(r =>
+        (r.result || '').toLowerCase().includes('selected') ||
+        (r.result || '').toLowerCase().includes('placed') ||
         (r.result || '').toLowerCase().includes('offer')
     );
-    const placementStatus = placedResult 
-        ? `Placed @ ${placedResult.company_name}` 
-        : myApplications.length > 0 
-            ? 'In Progress' 
+    const placementStatus = placedResult
+        ? `Placed @ ${placedResult.company_name}`
+        : myApplications.length > 0
+            ? 'In Progress'
             : 'Unplaced';
 
     return (
@@ -204,6 +215,7 @@ function StudentDashboard({ user, onLogout }) {
                         { id: 'results', label: `Round Results (${myResults.length})` },
                         { id: 'applications', label: `My Applications (${myApplications.length})` },
                         { id: 'analysis', label: 'Performance Analysis' },
+                        { id: 'interventions', label: `My Interventions (${interventions.length})` },
                         { id: 'profile', label: 'Profile & Resume' }
                     ].map(tab => (
                         <button
@@ -452,6 +464,15 @@ function StudentDashboard({ user, onLogout }) {
                     </div>
                 )}
 
+                {activeTab === 'interventions' && (
+                    <InterventionRoster
+                        user={user}
+                        canGenerate={false}
+                        title="My Intervention Plan"
+                        description="Only your own intervention is visible here. Actions and status are read-only."
+                    />
+                )}
+
                 {/* TAB 5: PROFILE & RESUME */}
                 {activeTab === 'profile' && studentProfile && (
                     <div className="card" style={{ background: '#1e293b', padding: '24px', borderRadius: '10px', border: '1px solid #334155' }}>
@@ -468,7 +489,7 @@ function StudentDashboard({ user, onLogout }) {
                                     <div>10th Percentage: <strong style={{ color: '#fff' }}>{studentProfile.tenth}%</strong></div>
                                     <div>12th Percentage: <strong style={{ color: '#fff' }}>{studentProfile.twelfth}%</strong></div>
                                     <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        Placement Status: 
+                                        Placement Status:
                                         <span style={{
                                             background: placedResult ? 'rgba(16, 185, 129, 0.2)' : myApplications.length > 0 ? 'rgba(59, 130, 246, 0.2)' : 'rgba(148, 163, 184, 0.2)',
                                             color: placedResult ? '#34d399' : myApplications.length > 0 ? '#60a5fa' : '#94a3b8',
@@ -486,7 +507,7 @@ function StudentDashboard({ user, onLogout }) {
 
                             <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #334155' }}>
                                 <h4 style={{ color: '#60a5fa', fontSize: '0.95rem', marginBottom: '12px' }}>Resume Upload (`resumeUpload`)</h4>
-                                
+
                                 <form onSubmit={handleResumeUploadSubmit}>
                                     <div style={{ marginBottom: '12px' }}>
                                         <input

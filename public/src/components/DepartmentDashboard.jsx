@@ -4,15 +4,16 @@ function DepartmentDashboard({ user, onLogout }) {
 
     // Data states
     const [deptData, setDeptData] = React.useState(null);
+    const [interventions, setInterventions] = React.useState([]);
     const [loading, setLoading] = React.useState(true);
-    
+
     // Filters & Search
     const [searchQuery, setSearchQuery] = React.useState('');
     const [statusFilter, setStatusFilter] = React.useState('ALL');
-    
+
     // Selected Student for Slide-Over Drawer
     const [selectedStudent, setSelectedStudent] = React.useState(null);
-    
+
     // Toast Notification
     const [toastMsg, setToastMsg] = React.useState('');
 
@@ -30,12 +31,21 @@ function DepartmentDashboard({ user, onLogout }) {
                 const data = await res.json();
                 setDeptData(data);
             }
+            const interventionRes = await fetch('/api/interventions', {
+                headers: window.interventionHeaders(user)
+            });
+            if (interventionRes.ok) {
+                const interventionData = await interventionRes.json();
+                setInterventions(interventionData.interventions || []);
+            } else {
+                setInterventions([]);
+            }
         } catch (err) {
             console.error('Failed to load department dashboard data:', err);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [user]);
 
     React.useEffect(() => {
         fetchDepartmentData();
@@ -53,8 +63,21 @@ function DepartmentDashboard({ user, onLogout }) {
 
     const students = deptData?.students || [];
     const mentors = deptData?.mentors || [];
-    const interventions = deptData?.interventions || [];
     const placedStudents = deptData?.placed_students || [];
+
+    const updateInterventionStatus = async (interventionId, nextStatus) => {
+        const res = await fetch(`/api/interventions/${interventionId}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...window.interventionHeaders(user) },
+            body: JSON.stringify({ status: nextStatus })
+        });
+        if (res.ok) {
+            setInterventions(prev => prev.map(item => item.id === interventionId ? { ...item, status: nextStatus } : item));
+            showToast(`Intervention marked ${nextStatus.toLowerCase()}.`);
+        } else {
+            showToast('Unable to update intervention status.');
+        }
+    };
 
     // Filtered Students List
     const filteredStudents = React.useMemo(() => {
@@ -63,7 +86,7 @@ function DepartmentDashboard({ user, onLogout }) {
                 (s.register_number || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                 (s.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                 (s.assigned_mentor || '').toLowerCase().includes(searchQuery.toLowerCase());
-            
+
             const matchesStatus = statusFilter === 'ALL' ||
                 (statusFilter === 'PLACED' && s.status === 'Placed') ||
                 (statusFilter === 'AT_RISK' && s.status === 'At Risk') ||
@@ -233,7 +256,7 @@ function DepartmentDashboard({ user, onLogout }) {
                                                         </span>
                                                     </div>
                                                     <p style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '6px' }}>
-                                                        Target: <strong style={{ color: '#f8fafc' }}>{inv.target_students} Students</strong> &bull; Lead: <strong style={{ color: '#a78bfa' }}>{inv.mentor_in_charge}</strong>
+                                                        Student: <strong style={{ color: '#f8fafc' }}>{inv.student_gmail}</strong>
                                                     </p>
                                                 </div>
                                             ))}
@@ -384,38 +407,12 @@ function DepartmentDashboard({ user, onLogout }) {
 
                         {/* TAB 4: INTERVENTIONS */}
                         {activeTab === 'interventions' && (
-                            <div className="card" style={{ background: '#1e293b', padding: '24px', borderRadius: '10px', border: '1px solid #334155' }}>
-                                <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', marginBottom: '8px' }}>Department Training & Academic Interventions</h3>
-                                <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '20px' }}>Active improvement programs for struggling department students.</p>
-
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                    {interventions.map(inv => (
-                                        <div key={inv.id} style={{ background: '#0f172a', padding: '20px', borderRadius: '10px', border: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-                                            <div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                                    <h4 style={{ color: '#f8fafc', fontSize: '1.1rem', fontWeight: 'bold' }}>{inv.title}</h4>
-                                                    <span style={{ background: inv.status === 'APPROVED' ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)', color: inv.status === 'APPROVED' ? '#34d399' : '#f59e0b', padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>
-                                                        {inv.status}
-                                                    </span>
-                                                </div>
-                                                <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginTop: '6px' }}>
-                                                    Target Audience: <strong style={{ color: '#fff' }}>{inv.target_students} Students</strong> &bull; Mentor Lead: <strong style={{ color: '#a78bfa' }}>{inv.mentor_in_charge}</strong>
-                                                </p>
-                                            </div>
-
-                                            <div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => showToast(`Intervention "${inv.title}" updated by Department Head.`)}
-                                                    style={{ padding: '8px 16px', borderRadius: '6px', background: '#7c3aed', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}
-                                                >
-                                                    {inv.status === 'APPROVED' ? 'Overview Details' : 'Approve Intervention'}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
+                            <InterventionRoster
+                                user={user}
+                                canGenerate={true}
+                                title="Department Student Interventions"
+                                description="Expand a department student to inspect their intervention and action plan."
+                            />
                         )}
 
                         {/* TAB 5: PLACED GALLERY */}

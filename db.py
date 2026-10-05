@@ -51,6 +51,12 @@ def init_db():
             gmail TEXT NOT NULL,
             result TEXT NOT NULL,
             round INTEGER DEFAULT 1,
+            score REAL,
+            max_score REAL,
+            feedback TEXT,
+            weakness_area TEXT,
+            rejection_reason TEXT,
+            attempt_date TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(drive_id, gmail)
         )
@@ -66,6 +72,26 @@ def init_db():
 
     try:
         cursor.execute("ALTER TABLE student_drive_results ADD COLUMN round INTEGER DEFAULT 1")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    for column, definition in [
+        ("score", "REAL"),
+        ("max_score", "REAL"),
+        ("feedback", "TEXT"),
+        ("weakness_area", "TEXT"),
+        ("rejection_reason", "TEXT"),
+        ("attempt_date", "TEXT"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE student_drive_results ADD COLUMN {column} {definition}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+    try:
+        cursor.execute("ALTER TABLE authenticate ADD COLUMN department TEXT DEFAULT 'CSE'")
         conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -90,6 +116,39 @@ def init_db():
             student_id TEXT NOT NULL,
             assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(mentor_id, student_id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS interventions (
+            id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL,
+            student_gmail TEXT NOT NULL,
+            title TEXT NOT NULL,
+            failure_summary TEXT NOT NULL,
+            ai_analysis TEXT NOT NULL,
+            priority TEXT NOT NULL DEFAULT 'MEDIUM',
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            created_by TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS intervention_actions (
+            id TEXT PRIMARY KEY,
+            intervention_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            weakness_area TEXT,
+            resources TEXT,
+            assigned_to TEXT,
+            completed INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            due_date TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
         )
     """)
     conn.commit()
@@ -154,6 +213,17 @@ def init_db():
         cursor.execute("DELETE FROM authenticate WHERE LOWER(gmail) = 'admin@gmail.com'")
         conn.commit()
 
+    cursor.execute("SELECT uuid FROM authenticate WHERE LOWER(gmail) = 'mentor@gmail.com'")
+    demo_mentor = cursor.fetchone()
+    if demo_mentor:
+        cursor.execute("SELECT uuid FROM authenticate WHERE LOWER(role) = 'student'")
+        demo_students = cursor.fetchall()
+        cursor.executemany("""
+            INSERT OR IGNORE INTO mentor_students (id, mentor_id, student_id)
+            VALUES (?, ?, ?)
+        """, [(str(uuid.uuid4()), demo_mentor["uuid"], student["uuid"]) for student in demo_students])
+        conn.commit()
+
     # Seed sample drives if drives table is empty
     cursor.execute("SELECT COUNT(*) as count FROM drives")
     d_row = cursor.fetchone()
@@ -176,12 +246,24 @@ def get_user_by_gmail(gmail: str):
     """Fetch user record from 'authenticate' table by gmail."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT uuid, gmail, password, role FROM authenticate WHERE LOWER(gmail) = LOWER(?)", (gmail.strip(),))
+    cursor.execute("SELECT uuid, gmail, password, role, department FROM authenticate WHERE LOWER(gmail) = LOWER(?)", (gmail.strip(),))
     user = cursor.fetchone()
     conn.close()
     if user:
         return dict(user)
     return None
+
+def get_user_by_id(user_id: str):
+    """Fetch a user record by the authenticated UUID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT uuid, gmail, password, role, department FROM authenticate WHERE uuid = ?",
+        (user_id,)
+    )
+    user = cursor.fetchone()
+    conn.close()
+    return dict(user) if user else None
 
 def get_all_users():
     """Retrieve all accounts (without secrets) for demo quick-fill feature."""
@@ -267,18 +349,41 @@ def increment_drive_current_round(drive_id: str):
     conn.commit()
     conn.close()
 
-def upsert_student_drive_result(drive_id: str, gmail: str, result: str):
+def upsert_student_drive_result(
+    drive_id: str,
+    gmail: str,
+    result: str,
+    round_number: int = None,
+    score: float = None,
+    max_score: float = None,
+    feedback: str = None,
+    weakness_area: str = None,
+    rejection_reason: str = None,
+    attempt_date: str = None,
+):
     """Insert or update a student's result status for a specific company drive."""
     conn = get_db_connection()
     cursor = conn.cursor()
     res_id = str(uuid.uuid4())
     cursor.execute("""
-        INSERT INTO student_drive_results (id, drive_id, gmail, result, updated_at)
-        VALUES (?, ?, LOWER(?), ?, CURRENT_TIMESTAMP)
+        INSERT INTO student_drive_results
+            (id, drive_id, gmail, result, round, score, max_score, feedback,
+             weakness_area, rejection_reason, attempt_date, updated_at)
+        VALUES (?, ?, LOWER(?), ?, COALESCE(?, 1), ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(drive_id, gmail) DO UPDATE SET
             result = excluded.result,
+            round = CASE WHEN ? IS NULL THEN student_drive_results.round ELSE excluded.round END,
+            score = excluded.score,
+            max_score = excluded.max_score,
+            feedback = excluded.feedback,
+            weakness_area = excluded.weakness_area,
+            rejection_reason = excluded.rejection_reason,
+            attempt_date = excluded.attempt_date,
             updated_at = CURRENT_TIMESTAMP
-    """, (res_id, drive_id, gmail.strip(), result.strip()))
+    """, (
+        res_id, drive_id, gmail.strip(), result.strip(), round_number, score,
+        max_score, feedback, weakness_area, rejection_reason, attempt_date
+    , round_number))
     conn.commit()
     conn.close()
 
@@ -287,7 +392,8 @@ def get_drive_results(drive_id: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, drive_id, gmail, result, round, updated_at 
+        SELECT id, drive_id, gmail, result, round, score, max_score, feedback,
+               weakness_area, rejection_reason, attempt_date, updated_at
         FROM student_drive_results 
         WHERE drive_id = ? 
         ORDER BY updated_at DESC
@@ -301,7 +407,9 @@ def get_student_drive_results(gmail: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT s.id, s.drive_id, s.gmail, s.result, s.round, s.updated_at, d.company_name, d.job_role, d.ctc_lpa, d.location
+        SELECT s.id, s.drive_id, s.gmail, s.result, s.round, s.score, s.max_score,
+               s.feedback, s.weakness_area, s.rejection_reason, s.attempt_date,
+               s.updated_at, d.company_name, d.job_role, d.ctc_lpa, d.location
         FROM student_drive_results s
         JOIN drives d ON s.drive_id = d.id
         WHERE LOWER(s.gmail) = LOWER(?)
@@ -310,6 +418,168 @@ def get_student_drive_results(gmail: str):
     results = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return results
+
+def get_students_for_scope(user_id: str, role: str, department: str = None):
+    """Return student accounts visible to a requester under the role hierarchy."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    normalized_role = (role or "").strip().lower()
+    params = []
+    query = "SELECT uuid, gmail, role, department FROM authenticate WHERE LOWER(role) = 'student'"
+
+    if normalized_role == "student":
+        query += " AND uuid = ?"
+        params.append(user_id)
+    elif normalized_role in {"department", "dept"}:
+        query += " AND UPPER(COALESCE(department, 'CSE')) = UPPER(?)"
+        params.append(department or "CSE")
+    elif normalized_role == "mentor":
+        query = """
+            SELECT u.uuid, u.gmail, u.role, u.department
+            FROM authenticate u
+            JOIN mentor_students ms ON ms.student_id = u.uuid
+            WHERE LOWER(u.role) = 'student' AND ms.mentor_id = ?
+        """
+        params.append(user_id)
+    elif normalized_role not in {"coordinator", "admin"}:
+        query += " AND 1 = 0"
+
+    query += " ORDER BY LOWER(gmail)"
+    cursor.execute(query, params)
+    students = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return students
+
+def get_student_analysis_records(gmail: str):
+    """Return normalized result records used by failure analysis and the agent."""
+    return get_student_drive_results(gmail)
+
+def get_interventions(student_gmail: str = None, student_gmails: list = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if student_gmail:
+        cursor.execute("""
+            SELECT i.*, u.department
+            FROM interventions i
+            LEFT JOIN authenticate u ON LOWER(u.gmail) = LOWER(i.student_gmail)
+            WHERE LOWER(i.student_gmail) = LOWER(?)
+            ORDER BY i.updated_at DESC, i.created_at DESC, i.rowid DESC
+            LIMIT 3
+        """, (student_gmail,))
+    elif student_gmails is not None:
+        if not student_gmails:
+            conn.close()
+            return []
+        placeholders = ",".join("?" for _ in student_gmails)
+        cursor.execute(f"""
+            SELECT i.*, u.department
+            FROM interventions i
+            LEFT JOIN authenticate u ON LOWER(u.gmail) = LOWER(i.student_gmail)
+            WHERE LOWER(i.student_gmail) IN ({placeholders})
+            ORDER BY i.updated_at DESC
+        """, [gmail.lower() for gmail in student_gmails])
+    else:
+        cursor.execute("""
+            SELECT i.*, u.department
+            FROM interventions i
+            LEFT JOIN authenticate u ON LOWER(u.gmail) = LOWER(i.student_gmail)
+            ORDER BY i.updated_at DESC
+        """)
+
+    interventions = []
+    for row in cursor.fetchall():
+        intervention = dict(row)
+        cursor.execute("""
+            SELECT id, intervention_id, title, weakness_area, resources,
+                   assigned_to, completed, notes, due_date, created_at, updated_at
+            FROM intervention_actions
+            WHERE intervention_id = ?
+            ORDER BY created_at
+        """, (intervention["id"],))
+        intervention["actions"] = [dict(action) for action in cursor.fetchall()]
+        for action in intervention["actions"]:
+            action["completed"] = bool(action["completed"])
+        interventions.append(intervention)
+    conn.close()
+    return interventions
+
+def save_intervention(intervention: dict, actions: list):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    intervention_id = intervention.get("id") or str(uuid.uuid4())
+    cursor.execute("""
+        INSERT INTO interventions
+            (id, student_id, student_gmail, title, failure_summary, ai_analysis,
+             priority, status, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        intervention_id, intervention["student_id"], intervention["student_gmail"].lower(),
+        intervention["title"], intervention["failure_summary"], intervention["ai_analysis"],
+        intervention.get("priority", "MEDIUM"), intervention.get("status", "OPEN"),
+        intervention["created_by"]
+    ))
+    for action in actions:
+        cursor.execute("""
+            INSERT INTO intervention_actions
+                (id, intervention_id, title, weakness_area, resources, assigned_to,
+                 completed, notes, due_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(uuid.uuid4()), intervention_id, action["title"], action.get("weakness_area"),
+            action.get("resources"), action.get("assigned_to"),
+            1 if action.get("completed") else 0, action.get("notes"), action.get("due_date")
+        ))
+    cursor.execute("""
+        SELECT id FROM interventions
+        WHERE LOWER(student_gmail) = LOWER(?)
+        ORDER BY updated_at DESC, created_at DESC, rowid DESC
+        LIMIT -1 OFFSET 3
+    """, (intervention["student_gmail"],))
+    old_ids = [row["id"] for row in cursor.fetchall()]
+    for old_id in old_ids:
+        cursor.execute("DELETE FROM intervention_actions WHERE intervention_id = ?", (old_id,))
+        cursor.execute("DELETE FROM interventions WHERE id = ?", (old_id,))
+    conn.commit()
+    conn.close()
+    return get_interventions(student_gmail=intervention["student_gmail"])[0]
+
+def update_intervention_status(intervention_id: str, new_status: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE interventions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    """, (new_status, intervention_id))
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+def update_intervention_action(action_id: str, completed: bool = None, notes: str = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    updates = []
+    params = []
+    if completed is not None:
+        updates.append("completed = ?")
+        params.append(1 if completed else 0)
+    if notes is not None:
+        updates.append("notes = ?")
+        params.append(notes)
+    if not updates:
+        conn.close()
+        return False
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(action_id)
+    cursor.execute(f"UPDATE intervention_actions SET {', '.join(updates)} WHERE id = ?", params)
+    changed = cursor.rowcount > 0
+    if changed:
+        cursor.execute("""
+            UPDATE interventions SET updated_at = CURRENT_TIMESTAMP
+            WHERE id = (SELECT intervention_id FROM intervention_actions WHERE id = ?)
+        """, (action_id,))
+    conn.commit()
+    conn.close()
+    return changed
 
 def get_drive_results_count(drive_id: str) -> int:
     """Count candidate results for a specific drive."""

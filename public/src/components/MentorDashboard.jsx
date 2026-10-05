@@ -1,7 +1,7 @@
 function MentorDashboard({ user, onLogout }) {
     // Tab state: 'overview', 'mentees', 'placed', 'interventions', 'metrics'
     const [activeTab, setActiveTab] = React.useState('overview');
-    
+
     // Mentees & Interventions State
     const [mentees, setMentees] = React.useState([]);
     const [placedMentees, setPlacedMentees] = React.useState([]);
@@ -17,12 +17,13 @@ function MentorDashboard({ user, onLogout }) {
     const [editingNoteId, setEditingNoteId] = React.useState(null);
     const [editNoteContent, setEditNoteContent] = React.useState('');
     const [notesLoading, setNotesLoading] = React.useState(false);
-    
+
     // Rounds view modal
     const [viewRoundsStudent, setViewRoundsStudent] = React.useState(null);
     const [roundsHistory, setRoundsHistory] = React.useState([]);
-    
+
     const [toastMessage, setToastMessage] = React.useState('');
+    const [generatingStudentId, setGeneratingStudentId] = React.useState(null);
 
     const showToast = (msg) => {
         setToastMessage(msg);
@@ -39,8 +40,16 @@ function MentorDashboard({ user, onLogout }) {
                 const data = await menteesRes.json();
                 setMentees(data.mentees || []);
                 setPlacedMentees(data.placed_mentees || []);
-                setInterventions(data.interventions || []);
                 setMetrics(data.metrics || null);
+                const interventionRes = await fetch('/api/interventions', {
+                    headers: window.interventionHeaders(user)
+                });
+                if (interventionRes.ok) {
+                    const interventionData = await interventionRes.json();
+                    setInterventions(interventionData.interventions || []);
+                } else {
+                    setInterventions([]);
+                }
             } else {
                 // Fallback demo dataset if API not fully initialized
                 const demoMentees = [
@@ -52,20 +61,7 @@ function MentorDashboard({ user, onLogout }) {
                 ];
                 setMentees(demoMentees);
                 setPlacedMentees(demoMentees.filter(m => m.status === 'Placed'));
-                setInterventions([
-                    {
-                        id: 'intv-1',
-                        student_name: 'Divya M',
-                        register_number: '312321104032',
-                        title: 'Aptitude & Coding Practice Acceleration',
-                        priority: 'HIGH',
-                        status: 'IN_PROGRESS',
-                        actions: [
-                            { id: 'act-1', text: 'Complete 30 LeetCode Easy array problems', completed: true },
-                            { id: 'act-2', text: 'Attend daily 1-on-1 mock interview session', completed: false }
-                        ]
-                    }
-                ]);
+                setInterventions([]);
                 setMetrics({
                     total_mentees: 5,
                     placed_count: 2,
@@ -79,7 +75,7 @@ function MentorDashboard({ user, onLogout }) {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [user]);
 
     React.useEffect(() => {
         loadDashboardData();
@@ -89,7 +85,7 @@ function MentorDashboard({ user, onLogout }) {
     const filteredMentees = React.useMemo(() => {
         if (!searchQuery) return mentees;
         const q = searchQuery.toLowerCase();
-        return mentees.filter(m => 
+        return mentees.filter(m =>
             (m.name || '').toLowerCase().includes(q) ||
             (m.register_number || '').toLowerCase().includes(q) ||
             (m.department || '').toLowerCase().includes(q)
@@ -166,7 +162,7 @@ function MentorDashboard({ user, onLogout }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: editNoteContent.trim() })
             });
-        } catch (e) {}
+        } catch (e) { }
         setStudentNotes(prev => prev.map(n => n.note_id === noteId ? { ...n, content: editNoteContent.trim() } : n));
         setEditingNoteId(null);
         setEditNoteContent('');
@@ -176,21 +172,55 @@ function MentorDashboard({ user, onLogout }) {
     const handleDeleteNote = async (noteId) => {
         try {
             await fetch(`/api/mentor/notes/${noteId}`, { method: 'DELETE' });
-        } catch (e) {}
+        } catch (e) { }
         setStudentNotes(prev => prev.filter(n => n.note_id !== noteId));
         showToast('Note deleted.');
     };
 
     // Toggle Action Progress
-    const handleToggleAction = (intvId, actionId) => {
+    const handleToggleAction = async (intvId, actionId) => {
+        const intervention = interventions.find(item => item.id === intvId);
+        const action = intervention?.actions?.find(item => item.id === actionId);
+        if (!action) return;
+        const res = await fetch(`/api/intervention/actions/${actionId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...window.interventionHeaders(user) },
+            body: JSON.stringify({ completed: !action.completed })
+        });
+        if (!res.ok) {
+            showToast('Unable to update action progress.');
+            return;
+        }
         setInterventions(prev => prev.map(intv => {
             if (intv.id !== intvId) return intv;
-            const updatedActions = intv.actions.map(act => 
+            const updatedActions = intv.actions.map(act =>
                 act.id === actionId ? { ...act, completed: !act.completed } : act
             );
             return { ...intv, actions: updatedActions };
         }));
         showToast('Action item progress updated!');
+    };
+
+    const handleGenerateIntervention = async (student) => {
+        setGeneratingStudentId(student.student_id);
+        try {
+            const res = await fetch('/api/interventions/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...window.interventionHeaders(user) },
+                body: JSON.stringify({ student_id: student.student_id })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showToast(data.detail || 'Unable to generate intervention.');
+                return;
+            }
+            setInterventions(prev => [data.intervention, ...prev]);
+            showToast(`Intervention generated for ${student.name}.`);
+        } catch (error) {
+            showToast('Unable to reach the intervention service.');
+        } finally {
+            setGeneratingStudentId(null);
+        }
     };
 
     // View Student Rounds
@@ -329,9 +359,9 @@ function MentorDashboard({ user, onLogout }) {
                                                 <h4 style={{ color: '#f8fafc', fontSize: '1rem', fontWeight: '600' }}>{m.name}</h4>
                                                 <p style={{ color: '#94a3b8', fontSize: '0.8rem' }}>{m.register_number} &bull; {m.department}</p>
                                             </div>
-                                            <span style={{ 
-                                                padding: '2px 8px', 
-                                                borderRadius: '12px', 
+                                            <span style={{
+                                                padding: '2px 8px',
+                                                borderRadius: '12px',
                                                 fontSize: '0.75rem',
                                                 fontWeight: '600',
                                                 background: m.status === 'Placed' ? 'rgba(16,185,129,0.2)' : m.status === 'At Risk' ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.2)',
@@ -345,15 +375,15 @@ function MentorDashboard({ user, onLogout }) {
                                             <span>Placement Score: <strong>{m.placement_marks || 0}/100</strong></span>
                                         </div>
                                         <div style={{ marginTop: '14px', display: 'flex', gap: '8px' }}>
-                                            <button 
-                                                type="button" 
+                                            <button
+                                                type="button"
                                                 onClick={() => handleOpenStudentDetail(m)}
                                                 style={{ flex: 1, padding: '6px 12px', borderRadius: '6px', background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '500' }}
                                             >
                                                 Profile & Notes
                                             </button>
-                                            <button 
-                                                type="button" 
+                                            <button
+                                                type="button"
                                                 onClick={() => handleViewRounds(m)}
                                                 style={{ padding: '6px 12px', borderRadius: '6px', background: '#334155', color: '#f8fafc', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}
                                             >
@@ -375,7 +405,7 @@ function MentorDashboard({ user, onLogout }) {
                                 <h3 style={{ color: '#f8fafc', fontSize: '1.25rem' }}>Assigned Mentee List</h3>
                                 <p style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Track academic standing, placement results, and add mentorship notes.</p>
                             </div>
-                            <input 
+                            <input
                                 type="text"
                                 placeholder="Search by name, reg no, dept..."
                                 value={searchQuery}
@@ -413,10 +443,10 @@ function MentorDashboard({ user, onLogout }) {
                                             <td style={{ padding: '12px', fontWeight: '600' }}>{m.cgpa}</td>
                                             <td style={{ padding: '12px' }}>{m.placement_marks || 'N/A'}</td>
                                             <td style={{ padding: '12px' }}>
-                                                <span style={{ 
-                                                    padding: '4px 10px', 
-                                                    borderRadius: '12px', 
-                                                    fontSize: '0.75rem', 
+                                                <span style={{
+                                                    padding: '4px 10px',
+                                                    borderRadius: '12px',
+                                                    fontSize: '0.75rem',
                                                     fontWeight: '600',
                                                     background: m.status === 'Placed' ? 'rgba(16,185,129,0.2)' : m.status === 'At Risk' ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.2)',
                                                     color: m.status === 'Placed' ? '#34d399' : m.status === 'At Risk' ? '#f87171' : '#60a5fa'
@@ -425,15 +455,15 @@ function MentorDashboard({ user, onLogout }) {
                                                 </span>
                                             </td>
                                             <td style={{ padding: '12px', textAlign: 'right' }}>
-                                                <button 
-                                                    type="button" 
+                                                <button
+                                                    type="button"
                                                     onClick={() => handleOpenStudentDetail(m)}
                                                     style={{ padding: '6px 12px', borderRadius: '6px', background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '0.8rem', marginRight: '8px' }}
                                                 >
                                                     Profile & Notes
                                                 </button>
-                                                <button 
-                                                    type="button" 
+                                                <button
+                                                    type="button"
                                                     onClick={() => handleViewRounds(m)}
                                                     style={{ padding: '6px 12px', borderRadius: '6px', background: '#334155', color: '#f8fafc', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}
                                                 >
@@ -462,7 +492,7 @@ function MentorDashboard({ user, onLogout }) {
                                         <span style={{ background: 'rgba(16,185,129,0.2)', color: '#34d399', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>PLACED</span>
                                     </div>
                                     <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>{m.register_number} &bull; {m.department}</p>
-                                    
+
                                     <div style={{ marginTop: '16px', background: '#1e293b', padding: '12px', borderRadius: '6px' }}>
                                         <div style={{ color: '#60a5fa', fontWeight: 'bold', fontSize: '1rem' }}>{m.company || 'Tech Company'}</div>
                                         <div style={{ color: '#cbd5e1', fontSize: '0.85rem', marginTop: '2px' }}>Role: {m.job_role || 'Software Engineer'}</div>
@@ -476,49 +506,12 @@ function MentorDashboard({ user, onLogout }) {
 
                 {/* TAB 4: INTERVENTIONS */}
                 {activeTab === 'interventions' && (
-                    <div className="card" style={{ background: '#1e293b', padding: '24px', borderRadius: '10px', border: '1px solid #334155' }}>
-                        <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', marginBottom: '8px' }}>Active Intervention Workflows</h3>
-                        <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '20px' }}>Targeted learning plans and action steps assigned to mentees.</p>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            {interventions.map(intv => (
-                                <div key={intv.id} style={{ background: '#0f172a', padding: '20px', borderRadius: '10px', border: '1px solid #334155' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                                        <div>
-                                            <span style={{ 
-                                                background: intv.priority === 'HIGH' || intv.priority === 'CRITICAL' ? 'rgba(239,68,68,0.2)' : 'rgba(245,158,11,0.2)',
-                                                color: intv.priority === 'HIGH' || intv.priority === 'CRITICAL' ? '#f87171' : '#fbbf24',
-                                                padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold'
-                                            }}>
-                                                {intv.priority} PRIORITY
-                                            </span>
-                                            <h4 style={{ color: '#f8fafc', fontSize: '1.1rem', marginTop: '6px' }}>{intv.title}</h4>
-                                            <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Student: <strong>{intv.student_name}</strong> ({intv.register_number})</p>
-                                        </div>
-                                    </div>
-
-                                    <div style={{ marginTop: '16px' }}>
-                                        <h5 style={{ color: '#cbd5e1', fontSize: '0.875rem', marginBottom: '8px' }}>Action Items Checklist:</h5>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            {intv.actions.map(act => (
-                                                <label key={act.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#1e293b', padding: '10px 14px', borderRadius: '6px', cursor: 'pointer' }}>
-                                                    <input 
-                                                        type="checkbox"
-                                                        checked={act.completed}
-                                                        onChange={() => handleToggleAction(intv.id, act.id)}
-                                                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                                                    />
-                                                    <span style={{ color: act.completed ? '#94a3b8' : '#f8fafc', textDecoration: act.completed ? 'line-through' : 'none' }}>
-                                                        {act.text}
-                                                    </span>
-                                                </label>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
+                    <InterventionRoster
+                        user={user}
+                        canGenerate={true}
+                        title="Mentee Intervention Workflows"
+                        description="Expand any authorized mentee to view their intervention and action plan."
+                    />
                 )}
 
                 {/* TAB 5: METRICS */}
@@ -558,8 +551,8 @@ function MentorDashboard({ user, onLogout }) {
                                 <h3 style={{ color: '#f8fafc', fontSize: '1.25rem' }}>{selectedStudent.name}</h3>
                                 <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>{selectedStudent.register_number} &bull; {selectedStudent.department}</p>
                             </div>
-                            <button 
-                                type="button" 
+                            <button
+                                type="button"
                                 onClick={() => setSelectedStudent(null)}
                                 style={{ background: 'transparent', color: '#94a3b8', border: 'none', fontSize: '1.5rem', cursor: 'pointer' }}
                             >
@@ -629,7 +622,7 @@ function MentorDashboard({ user, onLogout }) {
                                         <div key={n.note_id} style={{ background: '#1e293b', padding: '14px', borderRadius: '8px', border: '1px solid #334155' }}>
                                             {editingNoteId === n.note_id ? (
                                                 <div>
-                                                    <textarea 
+                                                    <textarea
                                                         rows="3"
                                                         value={editNoteContent}
                                                         onChange={(e) => setEditNoteContent(e.target.value)}
