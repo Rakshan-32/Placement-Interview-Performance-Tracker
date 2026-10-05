@@ -291,6 +291,60 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted }) {
                         </div>
                     ) : (
                         <form onSubmit={handleBulkSubmit} className="modal-form">
+                            {/* Expected Format Template Card */}
+                            <div className="template-download-card">
+                                <div className="template-card-header">
+                                    <div className="template-card-icon">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                            <polyline points="14 2 14 8 20 8"></polyline>
+                                            <line x1="12" y1="18" x2="12" y2="12"></line>
+                                            <line x1="9" y1="15" x2="15" y2="15"></line>
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <h5 className="template-card-title">Expected Excel Format & Sample Template</h5>
+                                        <p className="template-card-sub">Download expected template to know column format before uploading</p>
+                                    </div>
+                                </div>
+
+                                <div className="template-columns-info">
+                                    <span className="col-badge required">User Email / gmail *</span>
+                                    <span className="col-badge optional">Role (Student, Mentor...)</span>
+                                    <span className="col-badge optional">Password</span>
+                                </div>
+
+                                <div className="template-download-actions">
+                                    <a 
+                                        href="/api/templates/download/sample_user_access.xlsx" 
+                                        download="sample_user_access.xlsx" 
+                                        className="btn-download-tpl excel"
+                                        title="Download Excel format template (.xlsx)"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                            <polyline points="7 10 12 15 17 10"></polyline>
+                                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                                        </svg>
+                                        Download Excel (.xlsx)
+                                    </a>
+
+                                    <a 
+                                        href="/api/templates/download/sample_user_access.csv" 
+                                        download="sample_user_access.csv" 
+                                        className="btn-download-tpl csv"
+                                        title="Download CSV format template (.csv)"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                            <polyline points="7 10 12 15 17 10"></polyline>
+                                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                                        </svg>
+                                        Download CSV (.csv)
+                                    </a>
+                                </div>
+                            </div>
+
                             <div className="input-field" style={{ marginBottom: '16px' }}>
                                 <label style={{ color: '#f8fafc', fontWeight: '500', marginBottom: '6px', display: 'block' }}>Default Assignee Role *</label>
                                 <select
@@ -337,7 +391,7 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted }) {
                                         </div>
                                     ) : (
                                         <div>
-                                            <span className="drop-title">Click to upload spreadsheet</span>
+                                            <span className="drop-title">Click to upload user access spreadsheet</span>
                                             <span className="drop-sub">Supports .xlsx and .csv files</span>
                                         </div>
                                     )}

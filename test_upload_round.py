@@ -20,6 +20,14 @@ def test_drive_result_upload_and_round_increment():
     
     drive_id = drives[0]["id"]
     print(f"Target drive ID: {drive_id} ({drives[0]['company_name']})")
+
+    # Clean previous test entries to ensure clean starting state
+    conn = db.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM student_drive_results WHERE gmail IN ('student1@example.com', 'student2@example.com')")
+    cursor.execute("UPDATE drives SET current_round = 1 WHERE id = ?", (drive_id,))
+    conn.commit()
+    conn.close()
     
     # 2. Create sample Excel file in memory with ONLY 'gmail' column header
     wb = openpyxl.Workbook()

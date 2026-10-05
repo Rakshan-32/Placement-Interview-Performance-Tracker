@@ -1,0 +1,8 @@
+Register Number,Full Name,Student Email,Department,CGPA,10th Percentage,12th Percentage,Technical Skills
+2021CS101,Rahul Sharma,rahul.sharma@college.edu,CSE,7.8,89.5,85.2,"Python, SQL, Java"
+2021CS102,Ananya Reddy,ananya.reddy@college.edu,CSE,8.5,92.0,88.0,"Java, Spring Boot, React"
+2021IT103,Vikram Patel,vikram.patel@college.edu,IT,6.9,78.0,72.0,"Python, HTML, CSS"
+2021EC104,Deepa Krishnan,deepa.krishnan@college.edu,ECE,7.2,85.0,80.0,"C++, Embedded Systems"
+2021CS105,Sneha Gupta,sneha.gupta@college.edu,CSE,9.1,95.0,93.5,"DSA, System Design, C++, AWS"
+2021EC106,Arjun Menon,arjun.menon@college.edu,ECE,7.5,88.0,82.0,"C, Python, IoT"
+2021CS107,Priya Nair,priya.nair@college.edu,CSE,8.2,90.5,87.0,"Python, ML, Data Science"

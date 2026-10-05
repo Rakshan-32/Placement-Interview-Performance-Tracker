@@ -143,6 +143,97 @@ function UploadResultsModal({ isOpen, onClose, drives, initialDriveId, onResults
                     </div>
                 ) : (
                     <form onSubmit={handleSubmit} className="modal-form">
+                        {/* Expected Format Template Card */}
+                        <div className="template-download-card">
+                            <div className="template-card-header">
+                                <div className="template-card-icon">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                        <polyline points="14 2 14 8 20 8"></polyline>
+                                        <line x1="12" y1="18" x2="12" y2="12"></line>
+                                        <line x1="9" y1="15" x2="15" y2="15"></line>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <h5 className="template-card-title">Expected Excel Format & Sample Templates</h5>
+                                    <p className="template-card-sub">Download pre-formatted sample templates to know exact column formats</p>
+                                </div>
+                            </div>
+
+                            <div className="template-format-grid">
+                                <div className="format-type-box">
+                                    <div className="format-type-header">
+                                        <span className="format-type-title">Drive Shortlist Template</span>
+                                        <span className="format-type-badge">Emails Only</span>
+                                    </div>
+                                    <div className="template-columns-info">
+                                        <span className="col-badge required">Student Gmail *</span>
+                                        <span className="col-badge optional">Student Name</span>
+                                        <span className="col-badge optional">Branch</span>
+                                    </div>
+                                    <div className="template-download-actions">
+                                        <a 
+                                            href="/api/templates/download/sample_drive_shortlist.xlsx" 
+                                            download="sample_drive_shortlist.xlsx" 
+                                            className="btn-download-tpl excel"
+                                            title="Download Shortlist Excel template"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                                <polyline points="7 10 12 15 17 10"></polyline>
+                                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                                            </svg>
+                                            Excel (.xlsx)
+                                        </a>
+                                        <a 
+                                            href="/api/templates/download/sample_drive_shortlist.csv" 
+                                            download="sample_drive_shortlist.csv" 
+                                            className="btn-download-tpl csv"
+                                            title="Download Shortlist CSV template"
+                                        >
+                                            CSV (.csv)
+                                        </a>
+                                    </div>
+                                </div>
+
+                                <div className="format-type-box">
+                                    <div className="format-type-header">
+                                        <span className="format-type-title">Drive Results & Verdicts</span>
+                                        <span className="format-type-badge">Status & Scores</span>
+                                    </div>
+                                    <div className="template-columns-info">
+                                        <span className="col-badge required">Student Gmail *</span>
+                                        <span className="col-badge required">Result Status *</span>
+                                        <span className="col-badge optional">Round</span>
+                                        <span className="col-badge optional">Score</span>
+                                    </div>
+                                    <div className="template-download-actions">
+                                        <a 
+                                            href="/api/templates/download/sample_drive_results.xlsx" 
+                                            download="sample_drive_results.xlsx" 
+                                            className="btn-download-tpl excel"
+                                            title="Download Drive Results Excel template"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                                <polyline points="7 10 12 15 17 10"></polyline>
+                                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                                            </svg>
+                                            Excel (.xlsx)
+                                        </a>
+                                        <a 
+                                            href="/api/templates/download/sample_drive_results.csv" 
+                                            download="sample_drive_results.csv" 
+                                            className="btn-download-tpl csv"
+                                            title="Download Drive Results CSV template"
+                                        >
+                                            CSV (.csv)
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div className="input-field">
                             <label>Target Placement Drive *</label>
                             <select
@@ -183,7 +274,7 @@ function UploadResultsModal({ isOpen, onClose, drives, initialDriveId, onResults
                                     </div>
                                 ) : (
                                     <div>
-                                        <span className="drop-title">Click to upload spreadsheet</span>
+                                        <span className="drop-title">Click to upload candidate results spreadsheet</span>
                                         <span className="drop-sub">Supports .xlsx and .csv files</span>
                                     </div>
                                 )}
@@ -191,7 +282,7 @@ function UploadResultsModal({ isOpen, onClose, drives, initialDriveId, onResults
                         </div>
 
                         <div className="info-box-tip">
-                            <strong>Spreadsheet Format:</strong> The Excel file only needs a column header for <code>gmail</code> (or email). All candidates in the file will be automatically shortlisted for the next round and their round number incremented by 1 in the student database.
+                            <strong>Smart Mode Auto-Detection:</strong> Uploading a file with just <code>gmail</code> auto-promotes candidate rounds. Including <code>Result Status</code> (Selected, Rejected, On Hold) updates explicit candidate verdicts & scores.
                         </div>
 
                         <div className="modal-foot">
@@ -199,7 +290,7 @@ function UploadResultsModal({ isOpen, onClose, drives, initialDriveId, onResults
                                 Cancel
                             </button>
                             <button type="submit" className="btn-submit" disabled={loading || !file}>
-                                {loading ? 'Processing...' : 'Upload & Shortlist Candidates'}
+                                {loading ? 'Processing...' : 'Upload & Update Candidate Results'}
                             </button>
                         </div>
                     </form>

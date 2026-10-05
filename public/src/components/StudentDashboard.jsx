@@ -71,7 +71,7 @@ function StudentDashboard({ user, onLogout }) {
             }
 
             const resInterventions = await fetch(`/api/interventions/${encodeURIComponent(user?.uuid || '')}`, {
-                headers: window.interventionHeaders(user)
+                headers: window.interventionHeaders ? window.interventionHeaders(user) : {}
             });
             if (resInterventions.ok) {
                 const interventionData = await resInterventions.json();
@@ -80,17 +80,49 @@ function StudentDashboard({ user, onLogout }) {
                 setInterventions([]);
             }
 
-            // Default profile
-            setStudentProfile({
-                name: user?.name || gmail.split('@')[0].replace('.', ' ').toUpperCase(),
-                register_number: '312321104012',
-                department: 'CSE',
-                cgpa: 8.4,
-                tenth: 91.5,
-                twelfth: 88.0,
-                skills: ['Python', 'Data Structures', 'React', 'SQL'],
-                resume_path: null
-            });
+            // 5. Fetch student profile from database (updated by coordinator roster)
+            const resProfile = await fetch(`/api/student/profile?gmail=${encodeURIComponent(gmail)}`);
+            if (resProfile.ok) {
+                const pData = await resProfile.json();
+                if (pData.profile) {
+                    const prof = pData.profile;
+                    setStudentProfile({
+                        name: prof.name || user?.name || gmail.split('@')[0].replace('.', ' ').toUpperCase(),
+                        email: prof.email || gmail,
+                        register_number: prof.register_number || '312321104012',
+                        department: prof.department || 'CSE',
+                        cgpa: prof.cgpa !== undefined ? prof.cgpa : 8.4,
+                        tenth: prof.tenth_percentage !== undefined ? prof.tenth_percentage : 91.5,
+                        twelfth: prof.twelfth_percentage !== undefined ? prof.twelfth_percentage : 88.0,
+                        skills: prof.skills_list && prof.skills_list.length > 0 ? prof.skills_list : (prof.skills ? prof.skills.split(',') : ['Python', 'SQL', 'React']),
+                        resume_path: prof.resume_path || null
+                    });
+                } else {
+                    setStudentProfile({
+                        name: user?.name || gmail.split('@')[0].replace('.', ' ').toUpperCase(),
+                        email: gmail,
+                        register_number: '312321104012',
+                        department: 'CSE',
+                        cgpa: 8.4,
+                        tenth: 91.5,
+                        twelfth: 88.0,
+                        skills: ['Python', 'Data Structures', 'React', 'SQL'],
+                        resume_path: null
+                    });
+                }
+            } else {
+                setStudentProfile({
+                    name: user?.name || gmail.split('@')[0].replace('.', ' ').toUpperCase(),
+                    email: gmail,
+                    register_number: '312321104012',
+                    department: 'CSE',
+                    cgpa: 8.4,
+                    tenth: 91.5,
+                    twelfth: 88.0,
+                    skills: ['Python', 'Data Structures', 'React', 'SQL'],
+                    resume_path: null
+                });
+            }
 
         } catch (err) {
             console.error('Error loading student workspace:', err);
@@ -473,23 +505,105 @@ function StudentDashboard({ user, onLogout }) {
                     />
                 )}
 
-                {/* TAB 5: PROFILE & RESUME */}
+                {/* TAB 5: PERSONAL INFO & ACADEMIC PROFILE */}
                 {activeTab === 'profile' && studentProfile && (
                     <div className="card" style={{ background: '#1e293b', padding: '24px', borderRadius: '10px', border: '1px solid #334155' }}>
-                        <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', marginBottom: '20px' }}>Student Profile & Resume Manager</h3>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+                            <div>
+                                <h3 style={{ color: '#f8fafc', fontSize: '1.25rem', margin: 0 }}>Personal & Academic Information</h3>
+                                <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>Official master academic records managed & updated by Placement Coordinators</p>
+                            </div>
+                            <span style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '4px 12px', borderRadius: '20px', fontSize: '0.78rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: '14px', height: '14px' }}>
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                Roster Verified Profile
+                            </span>
+                        </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                        {/* Top Summary Banner */}
+                        <div style={{ background: '#0f172a', padding: '20px', borderRadius: '10px', border: '1px solid #334155', marginBottom: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                                <div style={{ width: '54px', height: '54px', borderRadius: '50%', background: 'rgba(37, 99, 235, 0.2)', border: '2px solid #2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#60a5fa', fontWeight: 'bold', fontSize: '1.4rem' }}>
+                                    {studentProfile.name ? studentProfile.name.charAt(0).toUpperCase() : 'S'}
+                                </div>
+                                <div>
+                                    <h4 style={{ color: '#f8fafc', fontSize: '1.15rem', margin: 0 }}>{studentProfile.name}</h4>
+                                    <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: '2px 0 0 0' }}>{studentProfile.email || user.gmail} &bull; Reg No: <strong style={{ color: '#60a5fa' }}>{studentProfile.register_number}</strong></p>
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                                <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '6px 14px', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                                    Dept: {studentProfile.department}
+                                </span>
+                                <span style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '6px 14px', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                                    CGPA: {studentProfile.cgpa}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Profile Info Grid */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                            {/* Personal & Credential Details */}
                             <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #334155' }}>
-                                <h4 style={{ color: '#60a5fa', fontSize: '0.95rem', marginBottom: '12px' }}>Academic Info</h4>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', color: '#cbd5e1', fontSize: '0.9rem' }}>
-                                    <div>Name: <strong style={{ color: '#fff' }}>{studentProfile.name}</strong></div>
-                                    <div>Register No: <strong style={{ color: '#fff' }}>{studentProfile.register_number}</strong></div>
-                                    <div>Department: <strong style={{ color: '#fff' }}>{studentProfile.department}</strong></div>
-                                    <div>Current CGPA: <strong style={{ color: '#34d399' }}>{studentProfile.cgpa}</strong></div>
-                                    <div>10th Percentage: <strong style={{ color: '#fff' }}>{studentProfile.tenth}%</strong></div>
-                                    <div>12th Percentage: <strong style={{ color: '#fff' }}>{studentProfile.twelfth}%</strong></div>
-                                    <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        Placement Status:
+                                <h4 style={{ color: '#60a5fa', fontSize: '0.95rem', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: '16px', height: '16px' }}>
+                                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                        <circle cx="12" cy="7" r="4"></circle>
+                                    </svg>
+                                    Personal Credentials
+                                </h4>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', color: '#cbd5e1', fontSize: '0.88rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <span style={{ color: '#94a3b8' }}>Full Name</span>
+                                        <strong style={{ color: '#fff' }}>{studentProfile.name}</strong>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <span style={{ color: '#94a3b8' }}>Register Number</span>
+                                        <strong style={{ color: '#60a5fa' }}>{studentProfile.register_number}</strong>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <span style={{ color: '#94a3b8' }}>Student Email</span>
+                                        <strong style={{ color: '#fff' }}>{studentProfile.email || user.gmail}</strong>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <span style={{ color: '#94a3b8' }}>Department</span>
+                                        <strong style={{ color: '#fff' }}>{studentProfile.department}</strong>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <span style={{ color: '#94a3b8' }}>Account Role</span>
+                                        <span style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', fontSize: '0.75rem', fontWeight: 'bold', padding: '2px 8px', borderRadius: '4px' }}>
+                                            Student
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Academic Metrics & Performance */}
+                            <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #334155' }}>
+                                <h4 style={{ color: '#60a5fa', fontSize: '0.95rem', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: '16px', height: '16px' }}>
+                                        <path d="M22 10v6M2 10l10-5 10 5-10 5z"></path>
+                                        <path d="M6 12v5c3 3 9 3 12 0v-5"></path>
+                                    </svg>
+                                    Academic Records
+                                </h4>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', color: '#cbd5e1', fontSize: '0.88rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <span style={{ color: '#94a3b8' }}>Cumulative CGPA</span>
+                                        <strong style={{ color: '#34d399', fontSize: '1.05rem' }}>{studentProfile.cgpa} / 10.0</strong>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <span style={{ color: '#94a3b8' }}>10th Percentage</span>
+                                        <strong style={{ color: '#fff' }}>{studentProfile.tenth}%</strong>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <span style={{ color: '#94a3b8' }}>12th / Diploma %</span>
+                                        <strong style={{ color: '#fff' }}>{studentProfile.twelfth}%</strong>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ color: '#94a3b8' }}>Placement Status</span>
                                         <span style={{
                                             background: placedResult ? 'rgba(16, 185, 129, 0.2)' : myApplications.length > 0 ? 'rgba(59, 130, 246, 0.2)' : 'rgba(148, 163, 184, 0.2)',
                                             color: placedResult ? '#34d399' : myApplications.length > 0 ? '#60a5fa' : '#94a3b8',
@@ -504,10 +618,25 @@ function StudentDashboard({ user, onLogout }) {
                                     </div>
                                 </div>
                             </div>
+                        </div>
 
+                        {/* Technical Skills & Resume Section */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+                            {/* Skillset Tags */}
                             <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #334155' }}>
-                                <h4 style={{ color: '#60a5fa', fontSize: '0.95rem', marginBottom: '12px' }}>Resume Upload (`resumeUpload`)</h4>
+                                <h4 style={{ color: '#60a5fa', fontSize: '0.95rem', marginBottom: '12px' }}>Technical Skillset & Competencies</h4>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                    {(Array.isArray(studentProfile.skills) ? studentProfile.skills : (studentProfile.skills || '').split(',')).map((sk, idx) => (
+                                        <span key={idx} style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '5px 12px', borderRadius: '20px', fontSize: '0.82rem', fontWeight: '500' }}>
+                                            {sk.trim()}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
 
+                            {/* Resume Document Upload */}
+                            <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #334155' }}>
+                                <h4 style={{ color: '#60a5fa', fontSize: '0.95rem', marginBottom: '12px' }}>Resume Document Manager</h4>
                                 <form onSubmit={handleResumeUploadSubmit}>
                                     <div style={{ marginBottom: '12px' }}>
                                         <input
@@ -522,13 +651,16 @@ function StudentDashboard({ user, onLogout }) {
                                         disabled={uploadingResume || !resumeFile}
                                         style={{ padding: '8px 16px', borderRadius: '6px', background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}
                                     >
-                                        {uploadingResume ? 'Uploading Resume...' : 'Upload Resume'}
+                                        {uploadingResume ? 'Uploading Resume...' : 'Upload Updated Resume'}
                                     </button>
                                 </form>
 
                                 {studentProfile.resume_path && (
-                                    <div style={{ marginTop: '16px', color: '#34d399', fontSize: '0.85rem' }}>
-                                        Resume On File: <strong>{studentProfile.resume_path}</strong>
+                                    <div style={{ marginTop: '16px', color: '#34d399', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: '16px', height: '16px' }}>
+                                            <polyline points="20 6 9 17 4 12"></polyline>
+                                        </svg>
+                                        Active Resume On File: <strong>{studentProfile.resume_path}</strong>
                                     </div>
                                 )}
                             </div>

@@ -64,11 +64,43 @@ def init_db():
     conn.commit()
 
     # Migrations for pre-existing database tables
-    try:
-        cursor.execute("ALTER TABLE drives ADD COLUMN current_round INTEGER DEFAULT 1")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
+    for col_def in [
+        ("min_cgpa", "REAL DEFAULT 0.0"),
+        ("allowed_branches", "TEXT DEFAULT 'All'"),
+        ("location", "TEXT DEFAULT 'On Campus'"),
+        ("status", "TEXT DEFAULT 'Active'"),
+        ("deadline", "TEXT"),
+        ("current_round", "INTEGER DEFAULT 1"),
+        ("company_type", "TEXT DEFAULT 'PRODUCT'"),
+        ("required_cgpa", "REAL DEFAULT 0.0"),
+        ("total_rounds", "INTEGER DEFAULT 4"),
+        ("drive_date", "TEXT")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE drives ADD COLUMN {col_def[0]} {col_def[1]}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+    for col_def in [
+        ("round", "INTEGER DEFAULT 1"),
+        ("score", "REAL")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE student_drive_results ADD COLUMN {col_def[0]} {col_def[1]}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+    for col_def in [
+        ("is_active", "BOOLEAN DEFAULT 1"),
+        ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE authenticate ADD COLUMN {col_def[0]} {col_def[1]}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     try:
         cursor.execute("ALTER TABLE student_drive_results ADD COLUMN round INTEGER DEFAULT 1")
@@ -95,7 +127,6 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass
-    
     # Create mentor_notes table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS mentor_notes (
@@ -149,6 +180,36 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
+        )
+    """)
+
+    # Create students_roster table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS students_roster (
+            student_id TEXT PRIMARY KEY,
+            register_number TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            department TEXT NOT NULL,
+            cgpa REAL NOT NULL,
+            tenth_percentage REAL,
+            twelfth_percentage REAL,
+            skills TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Create upload_logs table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS upload_logs (
+            log_id TEXT PRIMARY KEY,
+            upload_type TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            total_rows INTEGER NOT NULL,
+            processed_count INTEGER NOT NULL,
+            skipped_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
@@ -580,6 +641,30 @@ def update_intervention_action(action_id: str, completed: bool = None, notes: st
     conn.commit()
     conn.close()
     return changed
+
+def get_student_profile_by_email(email: str):
+    """Fetch student academic profile by email from students_roster table."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    email_clean = email.strip().lower()
+
+    cursor.execute("""
+        SELECT student_id, register_number, name, email, department, cgpa, 
+               tenth_percentage, twelfth_percentage, skills, created_at
+        FROM students_roster
+        WHERE LOWER(email) = ?
+    """, (email_clean,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        res = dict(row)
+        if isinstance(res.get("skills"), str) and res.get("skills"):
+            res["skills_list"] = [s.strip() for s in res["skills"].split(",") if s.strip()]
+        else:
+            res["skills_list"] = []
+        return res
+    return None
 
 def get_drive_results_count(drive_id: str) -> int:
     """Count candidate results for a specific drive."""
@@ -1078,9 +1163,277 @@ def get_department_dashboard_data(dept_code="CSE"):
     }
 
 
+# ==============================================================
+# BULK UPLOAD MODULE DATABASE INTEGRATION
+# ==============================================================
+
+def get_drive(drive_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, company_name, company_type, job_role, ctc_lpa, min_cgpa, required_cgpa, 
+               allowed_branches, location, total_rounds, drive_date, status, current_round, created_at 
+        FROM drives WHERE id = ?
+    """, (drive_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def upsert_company_drive_record(
+    company_name: str,
+    job_role: str,
+    ctc_lpa: float,
+    company_type: str = "PRODUCT",
+    required_cgpa: float = 0.0,
+    allowed_branches: str = "All",
+    location: str = "On Campus",
+    total_rounds: int = 4,
+    drive_date: str = None,
+    status: str = "Active",
+    drive_id: str = None
+):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    comp_clean = company_name.strip()
+    role_clean = job_role.strip()
+
+    if drive_id:
+        cursor.execute("SELECT id FROM drives WHERE id = ?", (drive_id,))
+    else:
+        cursor.execute("SELECT id FROM drives WHERE LOWER(company_name) = ? AND LOWER(job_role) = ?",
+                       (comp_clean.lower(), role_clean.lower()))
+
+    existing = cursor.fetchone()
+
+    if existing:
+        target_id = existing["id"]
+        cursor.execute("""
+            UPDATE drives 
+            SET company_name = ?, job_role = ?, ctc_lpa = ?, company_type = ?, 
+                required_cgpa = ?, allowed_branches = ?, location = ?, 
+                total_rounds = ?, drive_date = ?, status = ?
+            WHERE id = ?
+        """, (comp_clean, role_clean, ctc_lpa, company_type, required_cgpa,
+              allowed_branches, location, total_rounds, drive_date, status, target_id))
+        action = "Updated"
+    else:
+        slug = f"{comp_clean.lower().replace(' ', '-')}-{role_clean.lower().replace(' ', '-')}-2026"
+        slug = "".join(c for c in slug if c.isalnum() or c == '-')
+        target_id = slug if len(slug) <= 40 else str(uuid.uuid4())
+
+        cursor.execute("""
+            INSERT INTO drives (
+                id, company_name, job_role, ctc_lpa, company_type, 
+                required_cgpa, allowed_branches, location, total_rounds, drive_date, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (target_id, comp_clean, role_clean, ctc_lpa, company_type,
+              required_cgpa, allowed_branches, location, total_rounds, drive_date, status))
+        action = "Created"
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "id": target_id,
+        "company_name": comp_clean,
+        "job_role": role_clean,
+        "ctc_lpa": ctc_lpa,
+        "company_type": company_type,
+        "required_cgpa": required_cgpa,
+        "allowed_branches": allowed_branches,
+        "total_rounds": total_rounds,
+        "location": location,
+        "drive_date": drive_date,
+        "status": status,
+        "action": action
+    }
+
+def process_shortlist_record(drive_id: str, email: str, base_round: int = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    email_clean = email.strip().lower()
+
+    cursor.execute("SELECT round FROM student_drive_results WHERE drive_id = ? AND LOWER(gmail) = ?", (drive_id, email_clean))
+    existing = cursor.fetchone()
+
+    if existing and existing["round"] is not None:
+        new_round = existing["round"] + 1
+    else:
+        new_round = (base_round or 1) + 1
+
+    result_str = f"Shortlisted for Round {new_round}"
+    record_id = str(uuid.uuid4())
+
+    cursor.execute("""
+        INSERT INTO student_drive_results (id, drive_id, gmail, result, round, updated_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(drive_id, gmail) DO UPDATE SET
+            round = excluded.round,
+            result = excluded.result,
+            updated_at = CURRENT_TIMESTAMP
+    """, (record_id, drive_id, email_clean, result_str, new_round))
+
+    conn.commit()
+    conn.close()
+
+    return {"gmail": email_clean, "round": new_round, "result": result_str, "status": "Promoted"}
+
+def process_verdict_record(
+    drive_id: str,
+    email: str,
+    verdict: str,
+    round_num: int = None,
+    score: float = None,
+    max_score: float = None,
+    feedback: str = None,
+    weakness_area: str = None,
+    rejection_reason: str = None,
+    attempt_date: str = None
+):
+    upsert_student_drive_result(
+        drive_id=drive_id,
+        gmail=email,
+        result=verdict,
+        round_number=round_num,
+        score=score,
+        max_score=max_score,
+        feedback=feedback,
+        weakness_area=weakness_area,
+        rejection_reason=rejection_reason,
+        attempt_date=attempt_date
+    )
+    return {"gmail": email.strip().lower(), "result": verdict.strip(), "round": round_num or 1, "score": score, "status": "Updated"}
+
+def upsert_user_account(email: str, role: str = "Student", password: str = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    email_clean = email.strip().lower()
+
+    role_map = {
+        "student": "Student",
+        "mentor": "Mentor",
+        "coordinator": "Coordinator",
+        "admin": "Coordinator",
+        "recruiter": "Recruiter",
+        "department": "Department",
+        "dept": "Department"
+    }
+    normalized_role = role_map.get(role.strip().lower(), "Student")
+
+    cursor.execute("SELECT uuid, password FROM authenticate WHERE LOWER(gmail) = ?", (email_clean,))
+    existing = cursor.fetchone()
+
+    if existing:
+        final_password = password if password else existing["password"]
+        cursor.execute("""
+            UPDATE authenticate 
+            SET role = ?, password = ? 
+            WHERE LOWER(gmail) = ?
+        """, (normalized_role, final_password, email_clean))
+        action = "Updated"
+        user_uuid = existing["uuid"]
+    else:
+        user_uuid = str(uuid.uuid4())
+        default_pwds = {
+            "Student": "student123",
+            "Mentor": "mentor123",
+            "Coordinator": "coord123",
+            "Department": "dept123",
+            "Recruiter": "recruiter123"
+        }
+        final_password = password if password else default_pwds.get(normalized_role, f"{normalized_role.lower()}123")
+        cursor.execute("""
+            INSERT INTO authenticate (uuid, gmail, password, role)
+            VALUES (?, ?, ?, ?)
+        """, (user_uuid, email_clean, final_password, normalized_role))
+        action = "Created"
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "uuid": user_uuid,
+        "gmail": email_clean,
+        "role": normalized_role,
+        "action": action
+    }
+
+def upsert_student_roster_record(register_number: str, name: str, email: str, department: str,
+                                 cgpa: float, tenth: float = None, twelfth: float = None, skills: str = ""):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    email_clean = email.strip().lower()
+    reg_clean = register_number.strip().upper()
+    student_id = str(uuid.uuid4())
+
+    cursor.execute("""
+        INSERT INTO students_roster (
+            student_id, register_number, name, email, department, cgpa, tenth_percentage, twelfth_percentage, skills
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(register_number) DO UPDATE SET
+            name = excluded.name,
+            email = excluded.email,
+            department = excluded.department,
+            cgpa = excluded.cgpa,
+            tenth_percentage = excluded.tenth_percentage,
+            twelfth_percentage = excluded.twelfth_percentage,
+            skills = excluded.skills
+    """, (student_id, reg_clean, name.strip(), email_clean, department.strip().upper(),
+          cgpa, tenth, twelfth, skills.strip()))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "register_number": reg_clean,
+        "name": name.strip(),
+        "email": email_clean,
+        "department": department.strip().upper(),
+        "cgpa": cgpa
+    }
+
+def get_all_student_roster():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT student_id, register_number, name, email, department, cgpa, tenth_percentage, twelfth_percentage, skills, created_at
+        FROM students_roster
+        ORDER BY created_at DESC
+    """)
+    students = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return students
+
+def record_upload_log(upload_type: str, filename: str, total_rows: int, processed_count: int, skipped_count: int, status: str = "SUCCESS"):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    log_id = str(uuid.uuid4())
+
+    cursor.execute("""
+        INSERT INTO upload_logs (log_id, upload_type, filename, total_rows, processed_count, skipped_count, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (log_id, upload_type, filename, total_rows, processed_count, skipped_count, status))
+
+    conn.commit()
+    conn.close()
+    return log_id
+
+def get_upload_logs():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT log_id, upload_type, filename, total_rows, processed_count, skipped_count, status, created_at FROM upload_logs ORDER BY created_at DESC")
+    logs = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return logs
+
+
 if __name__ == "__main__":
     init_db()
     print("Database initialized successfully.")
+
 
 
 

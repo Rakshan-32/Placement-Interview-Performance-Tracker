@@ -357,6 +357,31 @@ body {
     transform: translateY(-1px);
 }
 
+.btn-upload-roster {
+    background: #059669;
+    color: #ffffff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.btn-upload-roster svg {
+    width: 16px;
+    height: 16px;
+}
+
+.btn-upload-roster:hover {
+    background: #047857;
+    transform: translateY(-1px);
+}
+
 .btn-upload-results {
     background: #0284c7;
     color: #ffffff;
@@ -1394,4 +1419,256 @@ body {
     font-size: 0.75rem;
     font-weight: 600;
 }
+
+/* ==========================================================================
+   Template Download & Expected Format Components
+   ========================================================================== */
+
+.template-download-card {
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.template-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.template-card-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    background: rgba(37, 99, 235, 0.2);
+    border: 1px solid rgba(37, 99, 235, 0.4);
+    color: #60a5fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.template-card-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.template-card-title {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: #f8fafc;
+}
+
+.template-card-sub {
+    font-size: 0.76rem;
+    color: #94a3b8;
+}
+
+.template-columns-info {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.col-badge {
+    font-size: 0.73rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+}
+
+.col-badge.required {
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.col-badge.optional {
+    background: rgba(148, 163, 184, 0.12);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.template-download-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.btn-download-tpl {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.btn-download-tpl.excel {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.btn-download-tpl.excel:hover {
+    background: rgba(16, 185, 129, 0.35);
+    color: #ffffff;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+}
+
+.btn-download-tpl.csv {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.btn-download-tpl.csv:hover {
+    background: rgba(59, 130, 246, 0.35);
+    color: #ffffff;
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+}
+
+.btn-download-tpl svg {
+    width: 14px;
+    height: 14px;
+}
+
+.template-format-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+@media (max-width: 600px) {
+    .template-format-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.format-type-box {
+    background: #0f172a;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.format-type-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.format-type-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #f8fafc;
+}
+
+.format-type-badge {
+    font-size: 0.68rem;
+    font-weight: 600;
+    background: rgba(147, 51, 234, 0.2);
+    color: #c084fc;
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+
+.btn-templates-hub {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: #34d399;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+}
+
+.btn-templates-hub:hover {
+    background: rgba(16, 185, 129, 0.25);
+    border-color: #34d399;
+    color: #ffffff;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+}
+
+.btn-templates-hub svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* Templates Hub Repository Modal Styling */
+.templates-hub-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 480px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.tpl-item-card {
+    background: #0f172a;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 14px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    transition: border-color 0.2s ease;
+}
+
+.tpl-item-card:hover {
+    border-color: var(--primary);
+}
+
+.tpl-item-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.tpl-item-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #f8fafc;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tpl-item-mode {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+}
+
+.tpl-item-desc {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    line-height: 1.3;
+}
+
 

@@ -14,14 +14,17 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 import db
 import intervention_service
+import bulk_upload_module.parser as bulk_parser
+import bulk_upload_module.exporter as bulk_exporter
+from bulk_upload_module.config import TEMPLATES_DIR, MAX_FILE_SIZE_BYTES
 
 
 # Initialize database on startup
 db.init_db()
 
 app = FastAPI(
-    title="Placement Tracking Authentication API",
-    description="Gmail & Password Authentication against SQLite 'authenticate' table"
+    title="Placement Portal & Dedicated Bulk Upload Engine",
+    description="Integrated API for Authentication, Placement Drives, Student Profiles, and Bulk Ingestion/Export."
 )
 
 # Enable CORS for React frontend
@@ -34,8 +37,8 @@ app.add_middleware(
 )
 
 class LoginRequest(BaseModel):
-    gmail: str = Field(..., json_schema_extra={"example": "[EMAIL_ADDRESS]"})
-    password: str = Field(..., json_schema_extra={"example": "admin123"})
+    gmail: str = Field(..., json_schema_extra={"example": "student@gmail.com"})
+    password: str = Field(..., json_schema_extra={"example": "student123"})
 
 @app.post("/api/login")
 async def login(credentials: LoginRequest):
@@ -51,7 +54,7 @@ async def login(credentials: LoginRequest):
     # Query database table 'authenticate' for user record
     user = db.get_user_by_gmail(gmail)
     
-    # Check if user exists and comparing stored password with entered password
+    # Check if user exists and compare stored password
     if not user or user["password"] != password:
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -61,7 +64,6 @@ async def login(credentials: LoginRequest):
             }
         )
     
-    # Passwords match -> User successfully authenticated
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
@@ -90,17 +92,12 @@ class CreateDriveRequest(BaseModel):
 async def list_demo_users():
     """Helper endpoint to list available demo accounts for convenience."""
     users = db.get_all_users()
-    return {"success": True, "users": users}
-
-import io
-import csv
-import openpyxl
+    return {"success": True, "users": users, "count": len(users)}
 
 @app.get("/api/drives")
 async def list_drives():
     """Endpoint to retrieve all placement drives from SQLite."""
     drives = db.get_all_drives()
-    # Attach result count to each drive for convenience
     for d in drives:
         d["results_count"] = db.get_drive_results_count(d["id"])
     return {"success": True, "drives": drives}
@@ -130,277 +127,392 @@ async def create_new_drive(drive_data: CreateDriveRequest):
         content={"success": True, "message": "Drive created successfully!", "drive": new_drive}
     )
 
-from fastapi import UploadFile, File
-
 @app.get("/api/drives/{drive_id}/results")
 async def get_drive_results(drive_id: str):
     """Retrieve all student evaluation results for a specific drive."""
     results = db.get_drive_results(drive_id)
     return {"success": True, "results": results, "count": len(results)}
 
+
+# ==============================================================
+# SAMPLE TEMPLATES ENDPOINTS
+# ==============================================================
+
+@app.get("/api/templates")
+def list_sample_templates():
+    """Lists all available sample templates with download links and column schemas."""
+    templates = [
+        {
+            "name": "sample_drive_shortlist",
+            "title": "Drive Shortlist Template (Emails Only)",
+            "description": "Upload candidate emails to automatically advance them to the next interview round.",
+            "formats": ["sample_drive_shortlist.xlsx", "sample_drive_shortlist.csv"],
+            "required_columns": ["Student Gmail / Email"],
+            "optional_columns": ["Student Name", "Branch"],
+            "mode": "Shortlist Mode (Auto-increments round by +1)"
+        },
+        {
+            "name": "sample_drive_results",
+            "title": "Drive Results / Verdicts Template",
+            "description": "Upload candidate evaluations with explicit statuses (Selected, Rejected, On Hold) and scores.",
+            "formats": ["sample_drive_results.xlsx", "sample_drive_results.csv"],
+            "required_columns": ["Student Gmail / Email", "Result Status / Verdict"],
+            "optional_columns": ["Round", "Score", "Student Name"],
+            "mode": "Verdict Mode (Sets exact status)"
+        },
+        {
+            "name": "sample_user_access",
+            "title": "User Accounts & Role Provisioning Template",
+            "description": "Bulk create or update accounts for Students, Mentors, Coordinators, and Recruiters.",
+            "formats": ["sample_user_access.xlsx", "sample_user_access.csv"],
+            "required_columns": ["User Email"],
+            "optional_columns": ["Role (Student, Mentor, etc.)", "Password"],
+            "mode": "Role Access Mode"
+        },
+        {
+            "name": "sample_student_roster",
+            "title": "Student Academic Profiles Template",
+            "description": "Bulk import academic records, CGPA, 10th/12th percentages, and technical skills.",
+            "formats": ["sample_student_roster.xlsx", "sample_student_roster.csv"],
+            "required_columns": ["Register Number", "Full Name", "Student Email", "Department", "CGPA"],
+            "optional_columns": ["10th Percentage", "12th Percentage", "Technical Skills"],
+            "mode": "Academic Roster Mode"
+        },
+        {
+            "name": "sample_company_drives",
+            "title": "Company Placement Drives Template",
+            "description": "Bulk schedule on-campus placement drives with company type, CTC LPA, eligibility criteria, and rounds.",
+            "formats": ["sample_company_drives.xlsx", "sample_company_drives.csv"],
+            "required_columns": ["Company Name", "Job Role", "CTC LPA"],
+            "optional_columns": ["Company Type", "Required CGPA", "Allowed Branches", "Total Rounds", "Location", "Drive Date", "Status"],
+            "mode": "Company Drive Scheduling Mode"
+        }
+    ]
+    return {"success": True, "templates": templates}
+
+
+@app.get("/api/templates/download/{filename}")
+def download_template(filename: str):
+    """Downloads a specific Excel (.xlsx) or CSV sample template file."""
+    filepath = os.path.join(TEMPLATES_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Template file '{filename}' was not found. Call /api/templates to see available files."
+        )
+
+    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if filename.endswith(".xlsx") else "text/csv"
+    return FileResponse(filepath, media_type=mime_type, filename=filename)
+
+
+# ==============================================================
+# BULK UPLOAD INGESTION ENDPOINTS
+# ==============================================================
+
+@app.post("/api/upload/drive-shortlist/{drive_id}")
+async def upload_drive_shortlist(drive_id: str, file: UploadFile = File(...)):
+    drive = db.get_drive(drive_id)
+    if not drive:
+        raise HTTPException(status_code=404, detail=f"Drive with ID '{drive_id}' was not found.")
+
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds maximum allowed 10MB limit.")
+
+    try:
+        records, skipped_count, is_verdict_mode = bulk_parser.parse_drive_records(content, file.filename)
+    except ValueError as e:
+        db.record_upload_log("Drive Shortlist", file.filename, 0, 0, 0, status=f"FAILED: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    processed_records = []
+    for item in records:
+        res = db.process_shortlist_record(drive_id, item["email"], base_round=drive.get("current_round", 1))
+        processed_records.append(res)
+
+    db.record_upload_log(
+        upload_type=f"Drive Shortlist ({drive['company_name']})",
+        filename=file.filename,
+        total_rows=len(records) + skipped_count,
+        processed_count=len(processed_records),
+        skipped_count=skipped_count,
+        status="SUCCESS"
+    )
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content={
+        "success": True,
+        "mode": "Shortlist Mode (Auto-promoted candidates to next round)",
+        "drive_id": drive_id,
+        "company_name": drive["company_name"],
+        "total_rows": len(records) + skipped_count,
+        "promoted_count": len(processed_records),
+        "skipped_count": skipped_count,
+        "records": processed_records
+    })
+
+
+@app.post("/api/upload/drive-results/{drive_id}")
+async def upload_drive_results_endpoint(drive_id: str, file: UploadFile = File(...)):
+    drive = db.get_drive(drive_id)
+    if not drive:
+        raise HTTPException(status_code=404, detail=f"Drive with ID '{drive_id}' was not found.")
+
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds maximum allowed 10MB limit.")
+
+    try:
+        records, skipped_count, is_verdict_mode = bulk_parser.parse_drive_records(content, file.filename)
+    except ValueError as e:
+        db.record_upload_log("Drive Results", file.filename, 0, 0, 0, status=f"FAILED: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    processed_records = []
+    for item in records:
+        verdict = item.get("verdict") or "Shortlisted"
+        res = db.process_verdict_record(
+            drive_id=drive_id,
+            email=item["email"],
+            verdict=verdict,
+            round_num=item.get("round"),
+            score=item.get("score")
+        )
+        processed_records.append(res)
+
+    db.record_upload_log(
+        upload_type=f"Drive Results ({drive['company_name']})",
+        filename=file.filename,
+        total_rows=len(records) + skipped_count,
+        processed_count=len(processed_records),
+        skipped_count=skipped_count,
+        status="SUCCESS"
+    )
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content={
+        "success": True,
+        "mode": "Verdict Mode (Updated explicit status and scores)",
+        "drive_id": drive_id,
+        "company_name": drive["company_name"],
+        "total_rows": len(records) + skipped_count,
+        "updated_count": len(processed_records),
+        "skipped_count": skipped_count,
+        "records": processed_records
+    })
+
+
 @app.post("/api/drives/{drive_id}/upload-results")
 async def upload_drive_results(drive_id: str, file: UploadFile = File(...)):
     """
     Upload Excel (.xlsx) or CSV file containing candidate results.
-    Extracts 'gmail' and 'result' columns and updates student statuses for this company drive.
+    Auto-detects Shortlist Mode vs Verdict Mode and updates student statuses for this company drive.
     """
-    filename = file.filename.lower()
     content = await file.read()
-    
-    rows = []
-    
-    if filename.endswith(".xlsx") or filename.endswith(".xls"):
-        try:
-            wb = openpyxl.load_workbook(filename=io.BytesIO(content), data_only=True)
-            sheet = wb.active
-            for row in sheet.iter_rows(values_only=True):
-                if any(cell is not None for cell in row):
-                    rows.append([str(cell) if cell is not None else "" for cell in row])
-        except Exception as e:
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={"success": False, "message": f"Error parsing Excel file: {str(e)}"}
-            )
-    elif filename.endswith(".csv"):
-        try:
-            decoded = content.decode("utf-8", errors="ignore")
-            reader = csv.reader(io.StringIO(decoded))
-            for r in reader:
-                if any(c.strip() for c in r):
-                    rows.append(r)
-        except Exception as e:
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={"success": False, "message": f"Error parsing CSV file: {str(e)}"}
-            )
-    else:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "message": "Unsupported file format. Please upload an .xlsx or .csv file."}
-        )
-        
-    if not rows:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "message": "Uploaded file is empty."}
-        )
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        return JSONResponse(status_code=400, content={"success": False, "message": "File size exceeds maximum allowed 10MB limit.", "detail": "File size exceeds limit."})
 
-    # Search header row for 'gmail' and 'result' columns
-    header = [str(cell).strip().lower() for cell in rows[0]]
-    
-    gmail_idx = -1
-    result_idx = -1
-    round_idx = -1
-    score_idx = -1
-    max_score_idx = -1
-    feedback_idx = -1
-    weakness_idx = -1
-    rejection_idx = -1
-    attempt_date_idx = -1
-    
-    for idx, col in enumerate(header):
-        if col in ["gmail", "email", "student email", "student gmail", "mail", "gmail_id", "email_id", "student email id"]:
-            gmail_idx = idx
-        elif col in ["result", "status", "round result", "round_result", "verdict", "drive status", "drive_status", "state", "selection"]:
-            result_idx = idx
-        elif col in ["round", "round number", "round_no", "round no"]:
-            round_idx = idx
-        elif col in ["score", "marks", "obtained marks"]:
-            score_idx = idx
-        elif col in ["max score", "maximum score", "total marks"]:
-            max_score_idx = idx
-        elif col in ["feedback", "remarks", "comments"]:
-            feedback_idx = idx
-        elif col in ["weakness", "weakness area", "weakness_area", "skill gap"]:
-            weakness_idx = idx
-        elif col in ["rejection reason", "rejection_reason", "failure reason"]:
-            rejection_idx = idx
-        elif col in ["attempt date", "attempt_date", "evaluation date", "date"]:
-            attempt_date_idx = idx
-            
-    if gmail_idx == -1:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "message": f"Could not find a 'gmail' or 'email' column header in the spreadsheet. Found columns: {', '.join(header)}"}
-        )
-        
-    updated_count = 0
-    skipped_count = 0
+    try:
+        records, skipped_count, is_verdict_mode = bulk_parser.parse_drive_records(content, file.filename)
+    except ValueError as e:
+        db.record_upload_log("Drive Upload", file.filename, 0, 0, 0, status=f"FAILED: {str(e)}")
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e), "detail": str(e)})
+
+    drive = db.get_drive(drive_id)
+    base_round = drive.get("current_round", 1) if drive else 1
+
     processed_records = []
-
-    # Process data rows
-    for row in rows[1:]:
-        if len(row) <= gmail_idx:
-            skipped_count += 1
-            continue
-            
-        gmail_val = str(row[gmail_idx]).strip()
-        if not gmail_val or "@" not in gmail_val:
-            skipped_count += 1
-            continue
-
-        if result_idx != -1 and len(row) > result_idx:
-            result_val = str(row[result_idx]).strip()
-        else:
-            result_val = None
-
-        if result_val:
-            def optional_float(index):
-                if index == -1 or len(row) <= index or not str(row[index]).strip():
-                    return None
-                try:
-                    return float(row[index])
-                except (TypeError, ValueError):
-                    return None
-
-            round_value = None
-            if round_idx != -1 and len(row) > round_idx:
-                try:
-                    round_value = int(float(row[round_idx]))
-                except (TypeError, ValueError):
-                    round_value = None
-            db.upsert_student_drive_result(
-                drive_id,
-                gmail_val,
-                result_val,
-                round_number=round_value,
-                score=optional_float(score_idx),
-                max_score=optional_float(max_score_idx),
-                feedback=str(row[feedback_idx]).strip() if feedback_idx != -1 and len(row) > feedback_idx else None,
-                weakness_area=str(row[weakness_idx]).strip() if weakness_idx != -1 and len(row) > weakness_idx else None,
-                rejection_reason=str(row[rejection_idx]).strip() if rejection_idx != -1 and len(row) > rejection_idx else None,
-                attempt_date=str(row[attempt_date_idx]).strip() if attempt_date_idx != -1 and len(row) > attempt_date_idx else None,
+    for item in records:
+        if is_verdict_mode and item.get("verdict"):
+            res = db.process_verdict_record(
+                drive_id=drive_id,
+                email=item["email"],
+                verdict=item["verdict"],
+                round_num=item.get("round"),
+                score=item.get("score"),
+                max_score=item.get("max_score"),
+                feedback=item.get("feedback"),
+                weakness_area=item.get("weakness_area"),
+                rejection_reason=item.get("rejection_reason"),
+                attempt_date=item.get("attempt_date")
             )
-            updated_count += 1
-            processed_records.append({"gmail": gmail_val, "result": result_val})
         else:
-            # Shortlist upload: increment round for student
-            inc_res = db.increment_student_drive_round(drive_id, gmail_val)
-            updated_count += 1
-            processed_records.append(inc_res)
+            res = db.process_shortlist_record(drive_id, item["email"], base_round=base_round)
+        processed_records.append(res)
 
+    db.record_upload_log(
+        upload_type=f"Drive Candidate Upload ({drive_id})",
+        filename=file.filename,
+        total_rows=len(records) + skipped_count,
+        processed_count=len(processed_records),
+        skipped_count=skipped_count,
+        status="SUCCESS"
+    )
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
             "success": True,
-            "message": f"Successfully processed {updated_count} student result records.",
-            "total_rows": len(rows) - 1,
-            "updated_count": updated_count,
+            "message": f"Successfully processed {len(processed_records)} student result records.",
+            "total_rows": len(records) + skipped_count,
+            "updated_count": len(processed_records),
             "skipped_count": skipped_count,
             "processed_records": processed_records
         }
     )
 
+
+@app.post("/api/upload/user-access")
 @app.post("/api/users/upload-access")
 async def upload_user_access(
     file: UploadFile = File(...),
     default_role: str = Form("Student")
 ):
-    """
-    Upload Excel (.xlsx) or CSV file containing user email addresses.
-    Grants access and creates/updates account roles in the database.
-    """
-    filename = file.filename.lower()
     content = await file.read()
-    
-    rows = []
-    
-    if filename.endswith(".xlsx") or filename.endswith(".xls"):
-        try:
-            wb = openpyxl.load_workbook(filename=io.BytesIO(content), data_only=True)
-            sheet = wb.active
-            for row in sheet.iter_rows(values_only=True):
-                if any(cell is not None for cell in row):
-                    rows.append([str(cell) if cell is not None else "" for cell in row])
-        except Exception as e:
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={"success": False, "message": f"Error parsing Excel file: {str(e)}"}
-            )
-    elif filename.endswith(".csv"):
-        try:
-            decoded = content.decode("utf-8", errors="ignore")
-            reader = csv.reader(io.StringIO(decoded))
-            for r in reader:
-                if any(c.strip() for c in r):
-                    rows.append(r)
-        except Exception as e:
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={"success": False, "message": f"Error parsing CSV file: {str(e)}"}
-            )
-    else:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "message": "Unsupported file format. Please upload an .xlsx or .csv file."}
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        return JSONResponse(status_code=400, content={"success": False, "message": "File size exceeds maximum allowed 10MB limit.", "detail": "File size exceeds limit."})
+
+    try:
+        records, skipped_count = bulk_parser.parse_user_access_records(content, file.filename, default_role=default_role)
+    except ValueError as e:
+        db.record_upload_log("User Access", file.filename, 0, 0, 0, status=f"FAILED: {str(e)}")
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e), "detail": str(e)})
+
+    created_count = 0
+    updated_count = 0
+    processed_users = []
+
+    for item in records:
+        res = db.upsert_user_account(
+            email=item["email"],
+            role=item["role"],
+            password=item.get("password")
         )
-        
-    if not rows:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "message": "Uploaded file is empty."}
-        )
-
-    header = [str(cell).strip().lower() for cell in rows[0]]
-    
-    gmail_idx = -1
-    role_idx = -1
-    password_idx = -1
-    
-    for idx, col in enumerate(header):
-        if col in ["gmail", "email", "student email", "user email", "mail", "gmail_id", "email_id", "student email id"]:
-            gmail_idx = idx
-        elif col in ["role", "user role", "access role", "account role", "type"]:
-            role_idx = idx
-        elif col in ["password", "pwd", "pass", "user password", "account password"]:
-            password_idx = idx
-
-    if gmail_idx == -1:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "message": f"Could not find a 'gmail' or 'email' column header in the spreadsheet. Found columns: {', '.join(header)}"}
-        )
-
-    users_to_process = []
-    skipped_count = 0
-
-    for row in rows[1:]:
-        if len(row) <= gmail_idx:
-            skipped_count += 1
-            continue
-            
-        gmail_val = str(row[gmail_idx]).strip()
-        role_val = str(row[role_idx]).strip() if (role_idx != -1 and len(row) > role_idx and str(row[role_idx]).strip()) else default_role
-        password_val = str(row[password_idx]).strip() if (password_idx != -1 and len(row) > password_idx and str(row[password_idx]).strip()) else None
-
-        if "@" in gmail_val:
-            item = {"gmail": gmail_val, "role": role_val}
-            if password_val:
-                item["password"] = password_val
-            users_to_process.append(item)
+        if res["action"] == "Created":
+            created_count += 1
         else:
-            skipped_count += 1
+            updated_count += 1
+        processed_users.append(res)
 
-
-    if not users_to_process:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "message": "No valid Gmail addresses found in the spreadsheet."}
-        )
-
-    summary = db.bulk_grant_user_access(users_to_process)
-    summary["skipped_count"] = skipped_count
-    summary["total_rows"] = len(rows) - 1
-
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={
-            "success": True,
-            "message": f"Successfully granted access to {summary['total_processed']} users ({summary['created_count']} created, {summary['updated_count']} updated).",
-            **summary
-        }
+    db.record_upload_log(
+        upload_type="User Access Onboarding",
+        filename=file.filename,
+        total_rows=len(records) + skipped_count,
+        processed_count=len(processed_users),
+        skipped_count=skipped_count,
+        status="SUCCESS"
     )
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content={
+        "success": True,
+        "message": f"Successfully granted access to {len(processed_users)} user accounts ({created_count} created, {updated_count} updated).",
+        "total_rows": len(records) + skipped_count,
+        "total_processed": len(processed_users),
+        "created_count": created_count,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "processed_users": processed_users,
+        "users": processed_users
+    })
+
+
+@app.post("/api/upload/student-roster")
+async def upload_student_roster(file: UploadFile = File(...)):
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds maximum allowed 10MB limit.")
+
+    try:
+        records, skipped_count = bulk_parser.parse_student_roster_records(content, file.filename)
+    except ValueError as e:
+        db.record_upload_log("Student Roster", file.filename, 0, 0, 0, status=f"FAILED: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    processed_students = []
+    for item in records:
+        res = db.upsert_student_roster_record(
+            register_number=item["register_number"],
+            name=item["name"],
+            email=item["email"],
+            department=item["department"],
+            cgpa=item["cgpa"],
+            tenth=item.get("tenth_percentage"),
+            twelfth=item.get("twelfth_percentage"),
+            skills=item.get("skills", "")
+        )
+        processed_students.append(res)
+
+    db.record_upload_log(
+        upload_type="Student Academic Roster",
+        filename=file.filename,
+        total_rows=len(records) + skipped_count,
+        processed_count=len(processed_students),
+        skipped_count=skipped_count,
+        status="SUCCESS"
+    )
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content={
+        "success": True,
+        "message": f"Successfully imported {len(processed_students)} student academic profiles.",
+        "total_rows": len(records) + skipped_count,
+        "imported_count": len(processed_students),
+        "skipped_count": skipped_count,
+        "students": processed_students
+    })
+
+
+@app.post("/api/upload/company-drives")
+async def upload_company_drives(file: UploadFile = File(...)):
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds maximum allowed 10MB limit.")
+
+    try:
+        records, skipped_count = bulk_parser.parse_company_drives_records(content, file.filename)
+    except ValueError as e:
+        db.record_upload_log("Company Drives", file.filename, 0, 0, 0, status=f"FAILED: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    created_count = 0
+    updated_count = 0
+    processed_drives = []
+
+    for item in records:
+        res = db.upsert_company_drive_record(
+            company_name=item["company_name"],
+            job_role=item["job_role"],
+            ctc_lpa=item["ctc_lpa"],
+            company_type=item["company_type"],
+            required_cgpa=item["required_cgpa"],
+            allowed_branches=item["allowed_branches"],
+            location=item["location"],
+            total_rounds=item["total_rounds"],
+            drive_date=item["drive_date"],
+            status=item["status"]
+        )
+        if res["action"] == "Created":
+            created_count += 1
+        else:
+            updated_count += 1
+        processed_drives.append(res)
+
+    db.record_upload_log(
+        upload_type="Company Drives Scheduling",
+        filename=file.filename,
+        total_rows=len(records) + skipped_count,
+        processed_count=len(processed_drives),
+        skipped_count=skipped_count,
+        status="SUCCESS"
+    )
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content={
+        "success": True,
+        "message": f"Successfully processed {len(processed_drives)} company placement drives ({created_count} created, {updated_count} updated).",
+        "total_rows": len(records) + skipped_count,
+        "created_count": created_count,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "drives": processed_drives
+    })
+
 
 class GrantSingleAccessRequest(BaseModel):
     gmail: str
@@ -427,6 +539,49 @@ async def grant_single_access(req: GrantSingleAccessRequest):
     )
 
 
+# ==============================================================
+# AUDIT LOGS & DATA VIEWING ENDPOINTS
+# ==============================================================
+
+@app.get("/api/students")
+def list_students():
+    students = db.get_all_student_roster()
+    return {"success": True, "count": len(students), "students": students}
+
+@app.get("/api/logs")
+def list_upload_logs():
+    logs = db.get_upload_logs()
+    return {"success": True, "count": len(logs), "logs": logs}
+
+
+# ==============================================================
+# EXPORT ENDPOINTS (EXCEL & CSV DOWNLOAD)
+# ==============================================================
+
+@app.get("/api/export/company-drives")
+def export_company_drives(format: str = "xlsx"):
+    drives = db.get_all_drives()
+    return bulk_exporter.export_company_drives_data(drives, format_type=format)
+
+@app.get("/api/export/drive-results/{drive_id}")
+def export_drive_results(drive_id: str, format: str = "xlsx"):
+    drive = db.get_drive(drive_id)
+    if not drive:
+        raise HTTPException(status_code=404, detail=f"Drive with ID '{drive_id}' was not found.")
+    results = db.get_drive_results(drive_id)
+    return bulk_exporter.export_drive_results_data(results, drive_info=drive, format_type=format)
+
+@app.get("/api/export/student-roster")
+def export_student_roster(format: str = "xlsx"):
+    students = db.get_all_student_roster()
+    return bulk_exporter.export_student_roster_data(students, format_type=format)
+
+@app.get("/api/export/user-access")
+def export_user_access(format: str = "xlsx"):
+    users = db.get_all_users()
+    return bulk_exporter.export_user_access_data(users, format_type=format)
+
+
 # ==========================================
 # STUDENT API ENDPOINTS
 # ==========================================
@@ -434,6 +589,27 @@ async def grant_single_access(req: GrantSingleAccessRequest):
 class StudentApplyRequest(BaseModel):
     gmail: str
     drive_id: str
+
+@app.get("/api/student/profile")
+async def get_student_profile(gmail: str):
+    """viewStudentProfile() — Retrieve a student's personal & academic profile information updated by coordinator."""
+    profile = db.get_student_profile_by_email(gmail)
+    if not profile:
+        email_clean = gmail.strip().lower()
+        default_name = email_clean.split("@")[0].replace(".", " ").title()
+        profile = {
+            "student_id": "demo-id",
+            "register_number": "312321104012",
+            "name": default_name,
+            "email": email_clean,
+            "department": "CSE",
+            "cgpa": 8.4,
+            "tenth_percentage": 91.5,
+            "twelfth_percentage": 88.0,
+            "skills": "Python, Data Structures, React, SQL",
+            "skills_list": ["Python", "Data Structures", "React", "SQL"]
+        }
+    return {"success": True, "profile": profile}
 
 @app.get("/api/student/results")
 async def get_student_results(gmail: str):
@@ -709,7 +885,6 @@ async def upload_student_resume(file: UploadFile = File(...), gmail: str = Form(
 # MENTOR API ENDPOINTS
 # ==========================================
 
-
 class MentorNoteRequest(BaseModel):
     student_id: str
     content: str
@@ -725,7 +900,6 @@ async def get_mentor_demo_data():
         "success": True,
         **data
     }
-
 
 @app.get("/api/mentor/notes")
 async def get_notes(student_id: str):
