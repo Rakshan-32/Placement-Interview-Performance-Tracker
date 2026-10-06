@@ -63,7 +63,17 @@ async def login(credentials: LoginRequest):
                 "message": "Invalid Gmail or password"
             }
         )
-    
+
+    # Check if user access has been revoked
+    if not user.get("is_active", True):
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "success": False,
+                "message": "Your account access has been revoked. Please contact the coordinator."
+            }
+        )
+
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
@@ -364,8 +374,13 @@ async def upload_drive_results(drive_id: str, file: UploadFile = File(...)):
 @app.post("/api/users/upload-access")
 async def upload_user_access(
     file: UploadFile = File(...),
-    default_role: str = Form("Student")
+    default_role: str = Form("Student"),
+    x_user_id: str = Header(None)
 ):
+    actor = None
+    if x_user_id:
+        actor = _require_coordinator(x_user_id)
+
     content = await file.read()
     if len(content) > MAX_FILE_SIZE_BYTES:
         return JSONResponse(status_code=400, content={"success": False, "message": "File size exceeds maximum allowed 10MB limit.", "detail": "File size exceeds limit."})
@@ -378,16 +393,21 @@ async def upload_user_access(
 
     created_count = 0
     updated_count = 0
+    skipped_revoked = 0
     processed_users = []
 
     for item in records:
         res = db.upsert_user_account(
             email=item["email"],
             role=item["role"],
-            password=item.get("password")
+            password=item.get("password"),
+            actor_uuid=actor["uuid"] if actor else None,
+            actor_gmail=actor["gmail"] if actor else None
         )
         if res["action"] == "Created":
             created_count += 1
+        elif res["action"] == "Skipped (Revoked)":
+            skipped_revoked += 1
         else:
             updated_count += 1
         processed_users.append(res)
@@ -397,18 +417,18 @@ async def upload_user_access(
         filename=file.filename,
         total_rows=len(records) + skipped_count,
         processed_count=len(processed_users),
-        skipped_count=skipped_count,
+        skipped_count=skipped_count + skipped_revoked,
         status="SUCCESS"
     )
 
     return JSONResponse(status_code=status.HTTP_200_OK, content={
         "success": True,
-        "message": f"Successfully granted access to {len(processed_users)} user accounts ({created_count} created, {updated_count} updated).",
+        "message": f"Successfully granted access to {len(processed_users)} user accounts ({created_count} created, {updated_count} updated, {skipped_revoked} skipped-revoked).",
         "total_rows": len(records) + skipped_count,
         "total_processed": len(processed_users),
         "created_count": created_count,
         "updated_count": updated_count,
-        "skipped_count": skipped_count,
+        "skipped_count": skipped_count + skipped_revoked,
         "processed_users": processed_users,
         "users": processed_users
     })
@@ -519,24 +539,146 @@ class GrantSingleAccessRequest(BaseModel):
     role: str = "Student"
     password: str = None
 
+def _require_coordinator(x_user_id: str = None):
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required (X-User-Id header missing)")
+    actor = db.get_user_by_id(x_user_id)
+    if not actor:
+        raise HTTPException(status_code=401, detail="Unknown user")
+    if actor["role"].strip().lower() not in ("coordinator", "admin"):
+        raise HTTPException(status_code=403, detail="Only Coordinators can perform this action")
+    if not actor.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Your account has been revoked")
+    return actor
+
+
 @app.post("/api/users/grant-single-access")
-async def grant_single_access(req: GrantSingleAccessRequest):
+async def grant_single_access(req: GrantSingleAccessRequest, x_user_id: str = Header(None)):
     gmail = req.gmail.strip().lower()
     if not gmail or "@" not in gmail:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"success": False, "message": "Please enter a valid Gmail address."}
         )
-    
-    result = db.grant_single_user_access(gmail=gmail, role=req.role, password=req.password)
+
+    actor = None
+    if x_user_id:
+        actor = _require_coordinator(x_user_id)
+
+    result = db.grant_single_user_access(
+        gmail=gmail, role=req.role, password=req.password,
+        actor_uuid=actor["uuid"] if actor else None,
+        actor_gmail=actor["gmail"] if actor else None
+    )
+
+    if result.get("is_active") is False:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "success": False,
+                "message": f"Account {gmail} is revoked. Use 'Reactivate' to restore access.",
+                "user": {"uuid": result["uuid"], "gmail": result["gmail"], "role": result["role"], "is_active": False}
+            }
+        )
+
+    safe_result = {k: v for k, v in result.items() if k != "password"}
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
             "success": True,
             "message": f"Successfully granted {result['role']} access to {gmail}.",
-            "user": result
+            "user": safe_result
         }
     )
+
+
+# ==============================================================
+# USER ACCESS MANAGEMENT ENDPOINTS
+# ==============================================================
+
+class RevokeRequest(BaseModel):
+    gmail: str
+
+class ReactivateRequest(BaseModel):
+    gmail: str
+
+class RoleUpdateRequest(BaseModel):
+    gmail: str
+    new_role: str
+
+
+@app.get("/api/users/managed")
+async def list_managed_users(x_user_id: str = Header(None)):
+    actor = _require_coordinator(x_user_id)
+    users = db.get_all_users()
+    return {"success": True, "users": users, "count": len(users)}
+
+
+@app.patch("/api/users/revoke")
+async def revoke_user_access(req: RevokeRequest, x_user_id: str = Header(None)):
+    actor = _require_coordinator(x_user_id)
+    gmail = req.gmail.strip().lower()
+    if not gmail or "@" not in gmail:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    if gmail == actor["gmail"].lower():
+        raise HTTPException(status_code=400, detail="You cannot revoke your own access")
+
+    user, result = db.revoke_user_access(gmail, actor_uuid=actor["uuid"], actor_gmail=actor["gmail"])
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if result == "already_revoked":
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"success": True, "message": f"Access for {gmail} is already revoked.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 0}}
+        )
+    return {"success": True, "message": f"Access revoked for {gmail}.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 0}}
+
+
+@app.patch("/api/users/reactivate")
+async def reactivate_user_access(req: ReactivateRequest, x_user_id: str = Header(None)):
+    actor = _require_coordinator(x_user_id)
+    gmail = req.gmail.strip().lower()
+    if not gmail or "@" not in gmail:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    user, result = db.reactivate_user_access(gmail, actor_uuid=actor["uuid"], actor_gmail=actor["gmail"])
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if result == "already_active":
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"success": True, "message": f"Access for {gmail} is already active.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 1}}
+        )
+    return {"success": True, "message": f"Access reactivated for {gmail}.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 1}}
+
+
+@app.patch("/api/users/update-role")
+async def update_user_role(req: RoleUpdateRequest, x_user_id: str = Header(None)):
+    actor = _require_coordinator(x_user_id)
+    gmail = req.gmail.strip().lower()
+    if not gmail or "@" not in gmail:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    normalized = db.normalize_role(req.new_role)
+    if not normalized or normalized not in db.VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(sorted(db.VALID_ROLES))}")
+
+    user, result = db.update_user_role(gmail, normalized,
+                                        actor_uuid=actor["uuid"], actor_gmail=actor["gmail"])
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if result == "same_role":
+        return {"success": True, "message": f"User {gmail} already has role {normalized}.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": user.get("is_active", 1)}}
+
+    return {"success": True, "message": f"Role for {gmail} updated to {normalized}.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": user.get("is_active", 1)}}
+
+
+@app.get("/api/users/access-history")
+async def get_access_history(gmail: str = None, x_user_id: str = Header(None)):
+    actor = _require_coordinator(x_user_id)
+    history = db.get_access_history(user_gmail=gmail)
+    return {"success": True, "history": history, "count": len(history)}
 
 
 # ==============================================================
@@ -686,6 +828,8 @@ def _requester(user_id: str, role: str, department: str):
     user = db.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=401, detail="Unknown user")
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Your account access has been revoked")
     if role and role.strip().lower() != user["role"].strip().lower():
         raise HTTPException(status_code=403, detail="User role does not match the authenticated account")
     user["department"] = department or user.get("department") or "CSE"

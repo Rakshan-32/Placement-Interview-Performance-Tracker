@@ -1,4 +1,4 @@
-function UploadUserAccessModal({ isOpen, onClose, onAccessGranted }) {
+function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
     if (!isOpen) return null;
 
     // Active mode tab: 'single' or 'bulk'
@@ -41,9 +41,11 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted }) {
         setLoading(true);
 
         try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (userUuid) headers['X-User-Id'] = userUuid;
             const res = await fetch('/api/users/grant-single-access', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({
                     gmail: singleGmail.trim(),
                     role: singleRole,
@@ -54,10 +56,12 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted }) {
             const data = await res.json();
 
             if (res.ok && data.success) {
-                setSuccessMsg(`Access granted to ${singleGmail} (${singleRole} Role). Default Password: ${data.user.password}`);
+                setSuccessMsg(`Access granted to ${singleGmail} (${singleRole} Role).`);
                 setSingleGmail('');
                 setSinglePassword('');
                 if (onAccessGranted) onAccessGranted(data);
+            } else if (res.status === 409) {
+                setErrorMsg(data.message || 'Account is revoked. Use Reactivate to restore access.');
             } else {
                 setErrorMsg(data.message || 'Failed to grant user access.');
             }
@@ -86,8 +90,11 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted }) {
             formData.append('file', file);
             formData.append('default_role', selectedRole);
 
+            const bulkHeaders = {};
+            if (userUuid) bulkHeaders['X-User-Id'] = userUuid;
             const res = await fetch('/api/users/upload-access', {
                 method: 'POST',
+                headers: bulkHeaders,
                 body: formData
             });
 

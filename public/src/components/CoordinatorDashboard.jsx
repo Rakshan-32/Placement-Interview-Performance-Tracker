@@ -28,6 +28,19 @@ function CoordinatorDashboard({ user, onLogout }) {
     const [selectedDriveForUpload, setSelectedDriveForUpload] = React.useState(null);
     const [selectedDriveForView, setSelectedDriveForView] = React.useState(null);
 
+    // User management state
+    const [managedUsers, setManagedUsers] = React.useState([]);
+    const [loadingUsers, setLoadingUsers] = React.useState(false);
+    const [userSearchTerm, setUserSearchTerm] = React.useState('');
+    const [userRoleFilter, setUserRoleFilter] = React.useState('All');
+    const [userStatusFilter, setUserStatusFilter] = React.useState('All');
+    const [confirmRevoke, setConfirmRevoke] = React.useState(null);
+    const [accessHistory, setAccessHistory] = React.useState([]);
+    const [loadingHistory, setLoadingHistory] = React.useState(false);
+    const [historyTarget, setHistoryTarget] = React.useState(null);
+    const [roleEditUser, setRoleEditUser] = React.useState(null);
+    const [roleEditValue, setRoleEditValue] = React.useState('');
+
     const [searchTerm, setSearchTerm] = React.useState('');
     const [viewMode, setViewMode] = React.useState('table'); // 'table' or 'grid'
     const [toastMessage, setToastMessage] = React.useState('');
@@ -123,6 +136,98 @@ function CoordinatorDashboard({ user, onLogout }) {
         setTimeout(() => setToastMessage(''), 3500);
     };
 
+    const authHeaders = { 'X-User-Id': user.uuid };
+
+    const fetchManagedUsers = React.useCallback(async () => {
+        setLoadingUsers(true);
+        try {
+            const res = await fetch('/api/users/managed', { headers: authHeaders });
+            const data = await res.json();
+            if (res.ok && data.success) setManagedUsers(data.users || []);
+        } catch (err) { console.error('Failed to fetch users:', err); }
+        finally { setLoadingUsers(false); }
+    }, [user.uuid]);
+
+    React.useEffect(() => {
+        if (activeTab === 'users') fetchManagedUsers();
+    }, [activeTab, fetchManagedUsers]);
+
+    const handleRevoke = async (gmail) => {
+        try {
+            const res = await fetch('/api/users/revoke', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
+                body: JSON.stringify({ gmail })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                setToastMessage(data.message);
+                fetchManagedUsers();
+            } else {
+                setToastMessage(data.detail || data.message || 'Failed to revoke access.');
+            }
+        } catch (err) { setToastMessage('Network error revoking access.'); }
+        setConfirmRevoke(null);
+        setTimeout(() => setToastMessage(''), 3500);
+    };
+
+    const handleReactivate = async (gmail) => {
+        try {
+            const res = await fetch('/api/users/reactivate', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
+                body: JSON.stringify({ gmail })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                setToastMessage(data.message);
+                fetchManagedUsers();
+            } else {
+                setToastMessage(data.detail || data.message || 'Failed to reactivate access.');
+            }
+        } catch (err) { setToastMessage('Network error reactivating access.'); }
+        setTimeout(() => setToastMessage(''), 3500);
+    };
+
+    const handleRoleUpdate = async (gmail, newRole) => {
+        try {
+            const res = await fetch('/api/users/update-role', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
+                body: JSON.stringify({ gmail, new_role: newRole })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                setToastMessage(data.message);
+                fetchManagedUsers();
+            } else {
+                setToastMessage(data.detail || data.message || 'Failed to update role.');
+            }
+        } catch (err) { setToastMessage('Network error updating role.'); }
+        setRoleEditUser(null);
+        setTimeout(() => setToastMessage(''), 3500);
+    };
+
+    const fetchAccessHistory = async (gmail) => {
+        setLoadingHistory(true);
+        setHistoryTarget(gmail || 'all');
+        try {
+            const url = gmail ? `/api/users/access-history?gmail=${encodeURIComponent(gmail)}` : '/api/users/access-history';
+            const res = await fetch(url, { headers: authHeaders });
+            const data = await res.json();
+            if (res.ok && data.success) setAccessHistory(data.history || []);
+        } catch (err) { console.error('Failed to fetch history:', err); }
+        finally { setLoadingHistory(false); }
+    };
+
+    const filteredUsers = managedUsers.filter(u => {
+        const matchSearch = u.gmail.toLowerCase().includes(userSearchTerm.toLowerCase());
+        const matchRole = userRoleFilter === 'All' || u.role === userRoleFilter;
+        const statusLabel = u.is_active ? 'ACTIVE' : 'REVOKED';
+        const matchStatus = userStatusFilter === 'All' || userStatusFilter === statusLabel;
+        return matchSearch && matchRole && matchStatus;
+    });
+
     const openUploadModal = (driveId = null) => {
         setSelectedDriveForUpload(driveId);
         setIsUploadModalOpen(true);
@@ -159,6 +264,7 @@ function CoordinatorDashboard({ user, onLogout }) {
                 <div className="nav-tabs" style={{ display: 'flex', gap: '8px', marginLeft: '24px' }}>
                     <button type="button" className={`tab-btn ${activeTab === 'drives' ? 'active' : ''}`} onClick={() => setActiveTab('drives')}>Placement Drives</button>
                     <button type="button" className={`tab-btn ${activeTab === 'interventions' ? 'active' : ''}`} onClick={() => setActiveTab('interventions')}>Interventions ({interventions.length})</button>
+                    <button type="button" className={`tab-btn ${activeTab === 'users' ? 'active' : ''}`} onClick={() => setActiveTab('users')}>Manage Users</button>
                 </div>
 
                 <div className="nav-right">
@@ -221,8 +327,166 @@ function CoordinatorDashboard({ user, onLogout }) {
                     />
                 )}
 
+                {activeTab === 'users' && (
+                    <div style={{ marginBottom: '20px' }}>
+                        {/* User Management Controls */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' }}>
+                            <div className="search-field" style={{ flex: '1 1 240px' }}>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                <input type="text" placeholder="Search by email..." value={userSearchTerm} onChange={(e) => setUserSearchTerm(e.target.value)} />
+                            </div>
+                            <select value={userRoleFilter} onChange={(e) => setUserRoleFilter(e.target.value)} style={{ padding: '9px 14px', borderRadius: '6px', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', fontSize: '0.9rem' }}>
+                                <option value="All">All Roles</option>
+                                <option value="Student">Student</option>
+                                <option value="Mentor">Mentor</option>
+                                <option value="Department">Department</option>
+                                <option value="Recruiter">Recruiter</option>
+                                <option value="Coordinator">Coordinator</option>
+                            </select>
+                            <select value={userStatusFilter} onChange={(e) => setUserStatusFilter(e.target.value)} style={{ padding: '9px 14px', borderRadius: '6px', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', fontSize: '0.9rem' }}>
+                                <option value="All">All Status</option>
+                                <option value="ACTIVE">Active</option>
+                                <option value="REVOKED">Revoked</option>
+                            </select>
+                            <button type="button" className="btn-upload-access" onClick={() => setIsUserAccessModalOpen(true)} style={{ whiteSpace: 'nowrap' }}>
+                                + Grant Access
+                            </button>
+                            <button type="button" onClick={() => fetchAccessHistory(null)} style={{ padding: '9px 16px', borderRadius: '6px', background: '#334155', color: '#f8fafc', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                                View All History
+                            </button>
+                            <button type="button" onClick={() => fetchManagedUsers()} style={{ padding: '9px 16px', borderRadius: '6px', background: '#334155', color: '#f8fafc', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.85rem' }}>
+                                Refresh
+                            </button>
+                        </div>
+
+                        {/* Users Table */}
+                        {loadingUsers ? (
+                            <div className="panel-loading"><div className="spinner-sm"></div><span>Loading users...</span></div>
+                        ) : filteredUsers.length === 0 ? (
+                            <div className="panel-empty"><h3>No Users Found</h3><p>No users match the current filters.</p></div>
+                        ) : (
+                            <div className="table-responsive">
+                                <table className="enterprise-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Email</th>
+                                            <th>Role</th>
+                                            <th>Status</th>
+                                            <th>Created</th>
+                                            <th style={{ textAlign: 'right' }}>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {filteredUsers.map(u => (
+                                            <tr key={u.uuid}>
+                                                <td className="font-semibold">{u.gmail}</td>
+                                                <td>
+                                                    {roleEditUser === u.uuid ? (
+                                                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                                            <select value={roleEditValue} onChange={(e) => setRoleEditValue(e.target.value)} style={{ padding: '4px 8px', borderRadius: '4px', background: '#0f172a', border: '1px solid #475569', color: '#f8fafc', fontSize: '0.85rem' }}>
+                                                                {['Student', 'Mentor', 'Department', 'Recruiter', 'Coordinator'].map(r => <option key={r} value={r}>{r}</option>)}
+                                                            </select>
+                                                            <button onClick={() => handleRoleUpdate(u.gmail, roleEditValue)} style={{ padding: '3px 10px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Save</button>
+                                                            <button onClick={() => setRoleEditUser(null)} style={{ padding: '3px 10px', background: '#475569', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>Cancel</button>
+                                                        </div>
+                                                    ) : (
+                                                        <span className={`badge-pill ${u.role.toLowerCase()}-pill`} style={{ cursor: 'pointer' }} onClick={() => { setRoleEditUser(u.uuid); setRoleEditValue(u.role); }} title="Click to change role">{u.role}</span>
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600', background: u.is_active ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: u.is_active ? '#34d399' : '#f87171', border: `1px solid ${u.is_active ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}` }}>
+                                                        {u.is_active ? 'ACTIVE' : 'REVOKED'}
+                                                    </span>
+                                                </td>
+                                                <td style={{ color: '#94a3b8', fontSize: '0.85rem' }}>{u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
+                                                <td style={{ textAlign: 'right' }}>
+                                                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                                        {u.is_active ? (
+                                                            <button onClick={() => setConfirmRevoke(u)} style={{ padding: '5px 12px', borderRadius: '6px', background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '600' }}>Revoke</button>
+                                                        ) : (
+                                                            <button onClick={() => handleReactivate(u.gmail)} style={{ padding: '5px 12px', borderRadius: '6px', background: 'rgba(16,185,129,0.15)', color: '#34d399', border: '1px solid rgba(16,185,129,0.3)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '600' }}>Reactivate</button>
+                                                        )}
+                                                        <button onClick={() => fetchAccessHistory(u.gmail)} style={{ padding: '5px 12px', borderRadius: '6px', background: 'rgba(37,99,235,0.15)', color: '#60a5fa', border: '1px solid rgba(37,99,235,0.3)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '500' }}>History</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+
+                        {/* Revoke Confirmation Modal */}
+                        {confirmRevoke && (
+                            <div className="modal-overlay" onClick={() => setConfirmRevoke(null)}>
+                                <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+                                    <div className="modal-head">
+                                        <h3 style={{ color: '#f87171' }}>Confirm Revoke Access</h3>
+                                        <button type="button" className="modal-close" onClick={() => setConfirmRevoke(null)}>&times;</button>
+                                    </div>
+                                    <div style={{ padding: '16px 0' }}>
+                                        <p style={{ color: '#f8fafc', marginBottom: '8px' }}>Revoke access for <strong>{confirmRevoke.gmail}</strong>?</p>
+                                        <p style={{ color: '#94a3b8', fontSize: '0.9rem' }}>This user will no longer be able to log in until access is reactivated by a coordinator.</p>
+                                    </div>
+                                    <div className="modal-foot">
+                                        <button type="button" className="btn-cancel" onClick={() => setConfirmRevoke(null)}>Cancel</button>
+                                        <button type="button" onClick={() => handleRevoke(confirmRevoke.gmail)} style={{ padding: '10px 20px', borderRadius: '6px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600' }}>Revoke Access</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Access History Modal */}
+                        {historyTarget && (
+                            <div className="modal-overlay" onClick={() => { setHistoryTarget(null); setAccessHistory([]); }}>
+                                <div className="modal-dialog large-dialog" onClick={(e) => e.stopPropagation()}>
+                                    <div className="modal-head">
+                                        <div>
+                                            <h3>Access History{historyTarget !== 'all' ? ` — ${historyTarget}` : ''}</h3>
+                                            <p className="modal-sub">Audit log of access changes</p>
+                                        </div>
+                                        <button type="button" className="modal-close" onClick={() => { setHistoryTarget(null); setAccessHistory([]); }}>&times;</button>
+                                    </div>
+                                    {loadingHistory ? (
+                                        <div className="panel-loading"><div className="spinner-sm"></div><span>Loading history...</span></div>
+                                    ) : accessHistory.length === 0 ? (
+                                        <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>No access history found.</div>
+                                    ) : (
+                                        <div className="table-responsive" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                                            <table className="enterprise-table">
+                                                <thead><tr><th>User</th><th>Action</th><th>Old Role</th><th>New Role</th><th>Old Status</th><th>New Status</th><th>Actor</th><th>Time</th></tr></thead>
+                                                <tbody>
+                                                    {accessHistory.map(h => (
+                                                        <tr key={h.id}>
+                                                            <td style={{ fontSize: '0.85rem' }}>{h.user_gmail}</td>
+                                                            <td>
+                                                                <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '0.78rem', fontWeight: '600',
+                                                                    background: h.action === 'GRANTED' ? 'rgba(16,185,129,0.15)' : h.action === 'REVOKED' ? 'rgba(239,68,68,0.15)' : h.action === 'REACTIVATED' ? 'rgba(59,130,246,0.15)' : 'rgba(168,85,247,0.15)',
+                                                                    color: h.action === 'GRANTED' ? '#34d399' : h.action === 'REVOKED' ? '#f87171' : h.action === 'REACTIVATED' ? '#60a5fa' : '#c084fc' }}>
+                                                                    {h.action}
+                                                                </span>
+                                                            </td>
+                                                            <td style={{ color: '#94a3b8', fontSize: '0.85rem' }}>{h.old_role || '—'}</td>
+                                                            <td style={{ fontSize: '0.85rem' }}>{h.new_role || '—'}</td>
+                                                            <td style={{ color: '#94a3b8', fontSize: '0.85rem' }}>{h.old_status || '—'}</td>
+                                                            <td style={{ fontSize: '0.85rem' }}>{h.new_status || '—'}</td>
+                                                            <td style={{ color: '#94a3b8', fontSize: '0.85rem' }}>{h.actor_gmail || 'System'}</td>
+                                                            <td style={{ color: '#64748b', fontSize: '0.8rem' }}>{h.created_at ? new Date(h.created_at).toLocaleString() : '—'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                    <div className="modal-foot" style={{ marginTop: '12px' }}><button type="button" className="btn-submit" onClick={() => { setHistoryTarget(null); setAccessHistory([]); }}>Close</button></div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {/* Toolbar & Filter Bar */}
-                <div className="table-toolbar">
+                {activeTab === 'drives' && <div className="table-toolbar">
                     <div className="search-field">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <circle cx="11" cy="11" r="8"></circle>
@@ -340,10 +604,10 @@ function CoordinatorDashboard({ user, onLogout }) {
                             Create Placement Drive
                         </button>
                     </div>
-                </div>
+                </div>}
 
                 {/* Main Data Section */}
-                <div className="data-panel">
+                {activeTab === 'drives' && <div className="data-panel">
                     {loadingDrives ? (
                         <div className="panel-loading">
                             <div className="spinner-sm"></div>
@@ -479,7 +743,7 @@ function CoordinatorDashboard({ user, onLogout }) {
                             ))}
                         </div>
                     )}
-                </div>
+                </div>}
             </div>
 
             {/* Create Drive Modal */}
@@ -509,7 +773,8 @@ function CoordinatorDashboard({ user, onLogout }) {
             <UploadUserAccessModal
                 isOpen={isUserAccessModalOpen}
                 onClose={() => setIsUserAccessModalOpen(false)}
-                onAccessGranted={handleUserAccessGranted}
+                onAccessGranted={(data) => { handleUserAccessGranted(data); if (activeTab === 'users') fetchManagedUsers(); }}
+                userUuid={user.uuid}
             />
 
             {/* Upload Student Roster Modal */}

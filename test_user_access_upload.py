@@ -90,7 +90,7 @@ def test_single_user_access_grant():
     assert data["success"] is True
     assert data["user"]["gmail"] == "single_student@gmail.com"
     assert data["user"]["role"] == "Student"
-    assert data["user"]["password"] == "custompwd123"
+    assert "password" not in data["user"], "Password must not be exposed in API response"
 
     user_in_db = db.get_user_by_gmail("single_student@gmail.com")
     assert user_in_db is not None

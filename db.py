@@ -22,7 +22,10 @@ def init_db():
             uuid TEXT PRIMARY KEY,
             gmail TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            department TEXT DEFAULT 'CSE'
         )
     """)
     
@@ -93,7 +96,7 @@ def init_db():
             pass
 
     for col_def in [
-        ("is_active", "BOOLEAN DEFAULT 1"),
+        ("is_active", "INTEGER DEFAULT 1"),
         ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     ]:
         try:
@@ -101,6 +104,10 @@ def init_db():
             conn.commit()
         except sqlite3.OperationalError:
             pass
+
+    # Backfill is_active for any existing rows where it is NULL
+    cursor.execute("UPDATE authenticate SET is_active = 1 WHERE is_active IS NULL")
+    conn.commit()
 
     try:
         cursor.execute("ALTER TABLE student_drive_results ADD COLUMN round INTEGER DEFAULT 1")
@@ -212,6 +219,23 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Create access_history audit log table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS access_history (
+            id TEXT PRIMARY KEY,
+            user_uuid TEXT NOT NULL,
+            user_gmail TEXT NOT NULL,
+            actor_uuid TEXT,
+            actor_gmail TEXT,
+            action TEXT NOT NULL,
+            old_role TEXT,
+            new_role TEXT,
+            old_status TEXT,
+            new_status TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
 
     # Seed demo users if empty
@@ -307,7 +331,7 @@ def get_user_by_gmail(gmail: str):
     """Fetch user record from 'authenticate' table by gmail."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT uuid, gmail, password, role, department FROM authenticate WHERE LOWER(gmail) = LOWER(?)", (gmail.strip(),))
+    cursor.execute("SELECT uuid, gmail, password, role, department, is_active FROM authenticate WHERE LOWER(gmail) = LOWER(?)", (gmail.strip(),))
     user = cursor.fetchone()
     conn.close()
     if user:
@@ -319,7 +343,7 @@ def get_user_by_id(user_id: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT uuid, gmail, password, role, department FROM authenticate WHERE uuid = ?",
+        "SELECT uuid, gmail, password, role, department, is_active FROM authenticate WHERE uuid = ?",
         (user_id,)
     )
     user = cursor.fetchone()
@@ -327,10 +351,10 @@ def get_user_by_id(user_id: str):
     return dict(user) if user else None
 
 def get_all_users():
-    """Retrieve all accounts (without secrets) for demo quick-fill feature."""
+    """Retrieve all accounts (without secrets) for user management."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT uuid, gmail, role FROM authenticate")
+    cursor.execute("SELECT uuid, gmail, role, is_active, created_at FROM authenticate ORDER BY created_at DESC")
     users = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return users
@@ -768,34 +792,44 @@ def bulk_grant_user_access(users_list: list):
         "processed_users": processed_users
     }
 
-def grant_single_user_access(gmail: str, role: str = "Student", password: str = None):
+def grant_single_user_access(gmail: str, role: str = "Student", password: str = None,
+                              actor_uuid: str = None, actor_gmail: str = None):
     """Grant or update access for a single user in 'authenticate' table."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     gmail_clean = gmail.strip().lower()
-    
-    # Normalize role casing
-    if role.lower() == "student":
-        role = "Student"
-    elif role.lower() == "mentor":
-        role = "Mentor"
-    elif role.lower() in ["department", "dept"]:
-        role = "Department"
-    elif role.lower() == "recruiter":
-        role = "Recruiter"
-    elif role.lower() in ["coordinator", "admin"]:
-        role = "Coordinator"
 
-    cursor.execute("SELECT uuid, role, password FROM authenticate WHERE LOWER(gmail) = ?", (gmail_clean,))
+    # Normalize role casing
+    normalized = normalize_role(role)
+    if normalized:
+        role = normalized
+
+    cursor.execute("SELECT uuid, role, password, is_active FROM authenticate WHERE LOWER(gmail) = ?", (gmail_clean,))
     existing = cursor.fetchone()
 
     if existing:
+        existing = dict(existing)
+        if not existing["is_active"]:
+            conn.close()
+            return {
+                "uuid": existing["uuid"],
+                "gmail": gmail_clean,
+                "role": existing["role"],
+                "action": "Revoked - use reactivate",
+                "is_active": False
+            }
+        old_role = existing["role"]
         final_pwd = password.strip() if (password and password.strip()) else existing["password"]
         if password and password.strip():
             cursor.execute("UPDATE authenticate SET role = ?, password = ? WHERE LOWER(gmail) = ?", (role, final_pwd, gmail_clean))
         else:
             cursor.execute("UPDATE authenticate SET role = ? WHERE LOWER(gmail) = ?", (role, gmail_clean))
+        if old_role != role:
+            record_access_history(conn, existing["uuid"], gmail_clean, "ROLE_UPDATED",
+                                  actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                                  old_role=old_role, new_role=role,
+                                  old_status="ACTIVE", new_status="ACTIVE")
         conn.commit()
         conn.close()
 
@@ -804,15 +838,20 @@ def grant_single_user_access(gmail: str, role: str = "Student", password: str = 
             "gmail": gmail_clean,
             "role": role,
             "password": final_pwd,
-            "action": "Updated Role & Password" if (password and password.strip()) else "Updated Role"
+            "action": "Updated Role & Password" if (password and password.strip()) else "Updated Role",
+            "is_active": True
         }
     else:
-        final_pwd = password.strip() if (password and password.strip()) else ("student123" if role == "Student" else "mentor123" if role == "Mentor" else "dept123" if role == "Department" else "user123")
+        final_pwd = password.strip() if (password and password.strip()) else ("student123" if role == "Student" else "mentor123" if role == "Mentor" else "dept123" if role == "Department" else "coord123" if role == "Coordinator" else "recruiter123" if role == "Recruiter" else "user123")
         new_uuid = str(uuid.uuid4())
         cursor.execute("""
-            INSERT INTO authenticate (uuid, gmail, password, role)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO authenticate (uuid, gmail, password, role, is_active)
+            VALUES (?, ?, ?, ?, 1)
         """, (new_uuid, gmail_clean, final_pwd, role))
+        record_access_history(conn, new_uuid, gmail_clean, "GRANTED",
+                              actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                              old_role=None, new_role=role,
+                              old_status=None, new_status="ACTIVE")
         conn.commit()
         conn.close()
 
@@ -821,7 +860,8 @@ def grant_single_user_access(gmail: str, role: str = "Student", password: str = 
             "gmail": gmail_clean,
             "role": role,
             "password": final_pwd,
-            "action": "Created Account"
+            "action": "Created Account",
+            "is_active": True
         }
 
 
@@ -1306,32 +1346,39 @@ def process_verdict_record(
     )
     return {"gmail": email.strip().lower(), "result": verdict.strip(), "round": round_num or 1, "score": score, "status": "Updated"}
 
-def upsert_user_account(email: str, role: str = "Student", password: str = None):
+def upsert_user_account(email: str, role: str = "Student", password: str = None,
+                        actor_uuid: str = None, actor_gmail: str = None):
     conn = get_db_connection()
     cursor = conn.cursor()
     email_clean = email.strip().lower()
 
-    role_map = {
-        "student": "Student",
-        "mentor": "Mentor",
-        "coordinator": "Coordinator",
-        "admin": "Coordinator",
-        "recruiter": "Recruiter",
-        "department": "Department",
-        "dept": "Department"
-    }
-    normalized_role = role_map.get(role.strip().lower(), "Student")
+    normalized_role = normalize_role(role) or "Student"
 
-    cursor.execute("SELECT uuid, password FROM authenticate WHERE LOWER(gmail) = ?", (email_clean,))
+    cursor.execute("SELECT uuid, password, role, is_active FROM authenticate WHERE LOWER(gmail) = ?", (email_clean,))
     existing = cursor.fetchone()
 
     if existing:
+        existing = dict(existing)
+        if not existing["is_active"]:
+            conn.close()
+            return {
+                "uuid": existing["uuid"],
+                "gmail": email_clean,
+                "role": existing["role"],
+                "action": "Skipped (Revoked)"
+            }
+        old_role = existing["role"]
         final_password = password if password else existing["password"]
         cursor.execute("""
-            UPDATE authenticate 
-            SET role = ?, password = ? 
+            UPDATE authenticate
+            SET role = ?, password = ?
             WHERE LOWER(gmail) = ?
         """, (normalized_role, final_password, email_clean))
+        if old_role != normalized_role:
+            record_access_history(conn, existing["uuid"], email_clean, "ROLE_UPDATED",
+                                  actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                                  old_role=old_role, new_role=normalized_role,
+                                  old_status="ACTIVE", new_status="ACTIVE")
         action = "Updated"
         user_uuid = existing["uuid"]
     else:
@@ -1345,9 +1392,13 @@ def upsert_user_account(email: str, role: str = "Student", password: str = None)
         }
         final_password = password if password else default_pwds.get(normalized_role, f"{normalized_role.lower()}123")
         cursor.execute("""
-            INSERT INTO authenticate (uuid, gmail, password, role)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO authenticate (uuid, gmail, password, role, is_active)
+            VALUES (?, ?, ?, ?, 1)
         """, (user_uuid, email_clean, final_password, normalized_role))
+        record_access_history(conn, user_uuid, email_clean, "GRANTED",
+                              actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                              old_role=None, new_role=normalized_role,
+                              old_status=None, new_status="ACTIVE")
         action = "Created"
 
     conn.commit()
@@ -1428,6 +1479,146 @@ def get_upload_logs():
     logs = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return logs
+
+
+VALID_ROLES = {"Student", "Mentor", "Department", "Recruiter", "Coordinator"}
+
+def normalize_role(role: str) -> str:
+    role_map = {
+        "student": "Student",
+        "mentor": "Mentor",
+        "coordinator": "Coordinator",
+        "admin": "Coordinator",
+        "recruiter": "Recruiter",
+        "department": "Department",
+        "dept": "Department"
+    }
+    return role_map.get(role.strip().lower(), None)
+
+
+def record_access_history(conn, user_uuid: str, user_gmail: str, action: str,
+                          actor_uuid: str = None, actor_gmail: str = None,
+                          old_role: str = None, new_role: str = None,
+                          old_status: str = None, new_status: str = None):
+    cursor = conn.cursor()
+    history_id = str(uuid.uuid4())
+    cursor.execute("""
+        INSERT INTO access_history (id, user_uuid, user_gmail, actor_uuid, actor_gmail,
+                                    action, old_role, new_role, old_status, new_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (history_id, user_uuid, user_gmail, actor_uuid, actor_gmail,
+          action, old_role, new_role, old_status, new_status))
+    return history_id
+
+
+def revoke_user_access(target_gmail: str, actor_uuid: str = None, actor_gmail: str = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    target_clean = target_gmail.strip().lower()
+
+    cursor.execute("SELECT uuid, gmail, role, is_active FROM authenticate WHERE LOWER(gmail) = ?", (target_clean,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return None, "User not found"
+
+    user = dict(user)
+    old_status = "ACTIVE" if user["is_active"] else "REVOKED"
+    if not user["is_active"]:
+        conn.close()
+        return user, "already_revoked"
+
+    cursor.execute("UPDATE authenticate SET is_active = 0 WHERE uuid = ?", (user["uuid"],))
+    record_access_history(conn, user["uuid"], user["gmail"], "REVOKED",
+                          actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                          old_role=user["role"], new_role=user["role"],
+                          old_status="ACTIVE", new_status="REVOKED")
+    conn.commit()
+    conn.close()
+    user["is_active"] = 0
+    return user, "revoked"
+
+
+def reactivate_user_access(target_gmail: str, actor_uuid: str = None, actor_gmail: str = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    target_clean = target_gmail.strip().lower()
+
+    cursor.execute("SELECT uuid, gmail, role, is_active FROM authenticate WHERE LOWER(gmail) = ?", (target_clean,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return None, "User not found"
+
+    user = dict(user)
+    if user["is_active"]:
+        conn.close()
+        return user, "already_active"
+
+    cursor.execute("UPDATE authenticate SET is_active = 1 WHERE uuid = ?", (user["uuid"],))
+    record_access_history(conn, user["uuid"], user["gmail"], "REACTIVATED",
+                          actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                          old_role=user["role"], new_role=user["role"],
+                          old_status="REVOKED", new_status="ACTIVE")
+    conn.commit()
+    conn.close()
+    user["is_active"] = 1
+    return user, "reactivated"
+
+
+def update_user_role(target_gmail: str, new_role: str, actor_uuid: str = None, actor_gmail: str = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    target_clean = target_gmail.strip().lower()
+
+    cursor.execute("SELECT uuid, gmail, role, is_active FROM authenticate WHERE LOWER(gmail) = ?", (target_clean,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return None, "User not found"
+
+    user = dict(user)
+    old_role = user["role"]
+
+    if old_role == new_role:
+        conn.close()
+        return user, "same_role"
+
+    cursor.execute("UPDATE authenticate SET role = ? WHERE uuid = ?", (new_role, user["uuid"]))
+    status_str = "ACTIVE" if user["is_active"] else "REVOKED"
+    record_access_history(conn, user["uuid"], user["gmail"], "ROLE_UPDATED",
+                          actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                          old_role=old_role, new_role=new_role,
+                          old_status=status_str, new_status=status_str)
+    conn.commit()
+    conn.close()
+    user["role"] = new_role
+    return user, "updated"
+
+
+def get_access_history(user_gmail: str = None, limit: int = 200):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if user_gmail:
+        cursor.execute("""
+            SELECT id, user_uuid, user_gmail, actor_uuid, actor_gmail,
+                   action, old_role, new_role, old_status, new_status, created_at
+            FROM access_history
+            WHERE LOWER(user_gmail) = LOWER(?)
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (user_gmail.strip(), limit))
+    else:
+        cursor.execute("""
+            SELECT id, user_uuid, user_gmail, actor_uuid, actor_gmail,
+                   action, old_role, new_role, old_status, new_status, created_at
+            FROM access_history
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
 
 
 if __name__ == "__main__":
