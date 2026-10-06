@@ -1,7 +1,21 @@
 """
-Shared pytest fixtures — cleans up test-created users before each session
-so tests don't trip on state from a previous run.
+Shared pytest fixtures — isolate tests in temp databases and
+clean up test-created users before each session.
 """
+import os
+import tempfile
+
+TEST_DIR = tempfile.gettempdir()
+ROOT_TEST_DB = os.path.join(TEST_DIR, f"placement_tracker_root_{os.getpid()}.db")
+BULK_TEST_DB = os.path.join(TEST_DIR, f"placement_tracker_bulk_{os.getpid()}.db")
+
+for test_db in (ROOT_TEST_DB, BULK_TEST_DB):
+    if os.path.exists(test_db):
+        os.remove(test_db)
+
+os.environ["DATABASE_URL"] = f"sqlite:///{ROOT_TEST_DB.replace(os.sep, '/')}"
+os.environ["BULK_UPLOAD_DB_PATH"] = BULK_TEST_DB
+
 import pytest
 import db
 
@@ -46,7 +60,7 @@ def _cleanup_test_users():
             )
         else:
             cursor.execute(
-                "INSERT INTO authenticate (uuid, gmail, password, role, is_active, access_status) VALUES (?, ?, ?, ?, 1, 'ACTIVE')",
+                "INSERT INTO authenticate (uuid, gmail, password, role, is_active, access_status, created_at) VALUES (?, ?, ?, ?, 1, 'ACTIVE', datetime('now'))",
                 (str(_uuid.uuid4()), email, pwd, role)
             )
     conn.commit()

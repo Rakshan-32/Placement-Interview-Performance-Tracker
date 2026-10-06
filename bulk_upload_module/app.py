@@ -6,10 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from typing import Optional
 
-from config import TEMPLATES_DIR, MAX_FILE_SIZE_BYTES
-import database as db
-import parser
-import exporter
+from .config import TEMPLATES_DIR, MAX_FILE_SIZE_BYTES
+from . import database as db
+from . import parser
+from . import exporter
 
 # Initialize tables on startup
 @asynccontextmanager

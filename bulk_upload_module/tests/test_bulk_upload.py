@@ -1,25 +1,11 @@
 import os
-import sys
-import importlib.util
-
-# Ensure parent directory is in sys.path for direct pytest invocation
-_bulk_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, _bulk_dir)
 
 import pytest
 from fastapi.testclient import TestClient
 
-# Load the bulk-upload app under a distinct module name so it does not
-# overwrite sys.modules['app'] (which must remain the root project app).
-_spec = importlib.util.spec_from_file_location(
-    "bulk_upload_app", os.path.join(_bulk_dir, "app.py"))
-_bulk_app_mod = importlib.util.module_from_spec(_spec)
-sys.modules["bulk_upload_app"] = _bulk_app_mod
-_spec.loader.exec_module(_bulk_app_mod)
-app = _bulk_app_mod.app
-
-from config import TEMPLATES_DIR
-import database as db
+from bulk_upload_module.app import app
+from bulk_upload_module.config import TEMPLATES_DIR
+from bulk_upload_module import database as db
 
 client = TestClient(app)
 
@@ -291,4 +277,3 @@ def test_export_user_access():
     csv_text = res_csv.content.decode("utf-8-sig")
     assert "User Email" in csv_text
     assert "Role" in csv_text
-

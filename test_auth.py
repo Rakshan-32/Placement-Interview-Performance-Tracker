@@ -23,6 +23,17 @@ def test_successful_login():
     assert "uuid" in data["user"], "UUID missing in response"
     print("[OK] Test 1 PASSED: Valid credentials login returned 200 OK and 'Logged in successfully'")
 
+def test_successful_student_login():
+    response = client.post("/api/login", json={
+        "gmail": "student@gmail.com",
+        "password": "student123"
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["user"]["gmail"] == "student@gmail.com"
+    assert data["user"]["role"] == "Student"
+
 def test_invalid_password():
     print("\nTest 2: Invalid password login...")
     response = client.post("/api/login", json={
