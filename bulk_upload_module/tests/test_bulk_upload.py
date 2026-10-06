@@ -1,15 +1,11 @@
 import os
-import sys
-
-# Ensure parent directory is in sys.path for direct pytest invocation
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import app
-from config import TEMPLATES_DIR
-import database as db
+from bulk_upload_module.app import app
+from bulk_upload_module.config import TEMPLATES_DIR
+from bulk_upload_module import database as db
 
 client = TestClient(app)
 
