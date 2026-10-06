@@ -73,7 +73,9 @@ def init_db():
             password TEXT NOT NULL,
             role TEXT NOT NULL,
             is_active BOOLEAN DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            department TEXT DEFAULT 'CSE',
+            access_status TEXT DEFAULT 'ACTIVE'
         )
     """)
 

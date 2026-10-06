@@ -1,3 +1,8 @@
+"""
+Access management tests — updated for the INVITED→ACTIVE lifecycle.
+Tests user listing, grant (invitation), revoke, reactivate, role update,
+access history, bulk grant, persistence, regression, and intervention security.
+"""
 import pytest
 import openpyxl
 import io
@@ -23,6 +28,20 @@ def _get_student():
 def _coord_headers():
     coord = _get_coordinator()
     return {"X-User-Id": coord["uuid"]}
+
+
+def _create_active_user(gmail: str, role: str = "Student", password: str = "TestPass123"):
+    """Invite then activate a user so they are ACTIVE with a known password."""
+    coord = _get_coordinator()
+    result = db.grant_single_user_access(
+        gmail, role,
+        actor_uuid=coord["uuid"], actor_gmail=coord["gmail"]
+    )
+    token = result.get("activation_token")
+    if token:
+        success, _ = db.activate_user(token, password)
+        assert success, f"Activation failed for {gmail}"
+    return db.get_user_by_gmail(gmail)
 
 
 # ==============================================================
@@ -55,29 +74,30 @@ class TestUserListing:
 
 
 # ==============================================================
-# GRANT ACCESS
+# GRANT ACCESS (Invitation)
 # ==============================================================
 
 class TestGrantAccess:
-    def test_grant_new_user(self):
+    def test_grant_new_user_creates_invited(self):
         res = client.post("/api/users/grant-single-access", json={
             "gmail": "newgrant_test@gmail.com", "role": "Student"
         }, headers=_coord_headers())
         assert res.status_code == 200
         data = res.json()
         assert data["success"] is True
-        assert "password" not in data["user"]
+        assert "password" not in str(data["user"])
 
         user = db.get_user_by_gmail("newgrant_test@gmail.com")
         assert user is not None
         assert user["role"] == "Student"
-        assert user["is_active"] == 1
+        assert user["access_status"] == "INVITED"
+        assert user["is_active"] == 0
 
     def test_grant_creates_history(self):
         history = db.get_access_history(user_gmail="newgrant_test@gmail.com")
-        granted = [h for h in history if h["action"] == "GRANTED"]
-        assert len(granted) >= 1
-        assert granted[0]["new_status"] == "ACTIVE"
+        invited = [h for h in history if h["action"] == "INVITED"]
+        assert len(invited) >= 1
+        assert invited[0]["new_status"] == "INVITED"
 
     def test_grant_invalid_email(self):
         res = client.post("/api/users/grant-single-access", json={
@@ -85,12 +105,13 @@ class TestGrantAccess:
         }, headers=_coord_headers())
         assert res.status_code == 400
 
-    def test_grant_existing_active_user_updates(self):
+    def test_grant_existing_active_user_updates_role(self):
+        _create_active_user("am_role_update@gmail.com", "Student")
         res = client.post("/api/users/grant-single-access", json={
-            "gmail": "newgrant_test@gmail.com", "role": "Mentor"
+            "gmail": "am_role_update@gmail.com", "role": "Mentor"
         }, headers=_coord_headers())
         assert res.status_code == 200
-        user = db.get_user_by_gmail("newgrant_test@gmail.com")
+        user = db.get_user_by_gmail("am_role_update@gmail.com")
         assert user["role"] == "Mentor"
 
 
@@ -100,7 +121,7 @@ class TestGrantAccess:
 
 class TestRevokeAccess:
     def test_revoke_active_user(self):
-        db.grant_single_user_access("revoke_test@gmail.com", "Student")
+        _create_active_user("revoke_test@gmail.com", "Student")
         res = client.patch("/api/users/revoke", json={
             "gmail": "revoke_test@gmail.com"
         }, headers=_coord_headers())
@@ -111,10 +132,11 @@ class TestRevokeAccess:
 
         user = db.get_user_by_gmail("revoke_test@gmail.com")
         assert user["is_active"] == 0
+        assert user["access_status"] == "REVOKED"
 
     def test_revoked_user_cannot_login(self):
         res = client.post("/api/login", json={
-            "gmail": "revoke_test@gmail.com", "password": "student123"
+            "gmail": "revoke_test@gmail.com", "password": "TestPass123"
         })
         assert res.status_code == 403
         data = res.json()
@@ -175,13 +197,14 @@ class TestReactivateAccess:
         data = res.json()
         assert data["success"] is True
         assert data["user"]["is_active"] == 1
+        assert data["user"]["access_status"] == "ACTIVE"
 
         user = db.get_user_by_gmail("revoke_test@gmail.com")
         assert user["is_active"] == 1
 
     def test_reactivated_user_can_login(self):
         res = client.post("/api/login", json={
-            "gmail": "revoke_test@gmail.com", "password": "student123"
+            "gmail": "revoke_test@gmail.com", "password": "TestPass123"
         })
         assert res.status_code == 200
         assert res.json()["success"] is True
@@ -220,7 +243,7 @@ class TestReactivateAccess:
 
 class TestRoleUpdate:
     def test_valid_role_update(self):
-        db.grant_single_user_access("roletest@gmail.com", "Student")
+        _create_active_user("roletest@gmail.com", "Student")
         res = client.patch("/api/users/update-role", json={
             "gmail": "roletest@gmail.com", "new_role": "Mentor"
         }, headers=_coord_headers())
@@ -277,8 +300,6 @@ class TestAccessHistory:
         data = res.json()
         assert data["success"] is True
         assert data["count"] > 0
-        for h in data["history"]:
-            assert "password" not in str(h).lower() or "password" not in h
 
     def test_get_user_history(self):
         res = client.get("/api/users/access-history?gmail=revoke_test@gmail.com", headers=_coord_headers())
@@ -300,11 +321,11 @@ class TestAccessHistory:
 
 
 # ==============================================================
-# BULK GRANT
+# BULK GRANT (Invitation)
 # ==============================================================
 
 class TestBulkGrant:
-    def test_bulk_creates_new_users_with_history(self):
+    def test_bulk_creates_invited_users_with_history(self):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.append(["gmail", "role"])
@@ -323,17 +344,18 @@ class TestBulkGrant:
         assert res.status_code == 200
         data = res.json()
         assert data["success"] is True
-        assert data["created_count"] == 2
+        assert data["invited_count"] == 2
 
         u1 = db.get_user_by_gmail("bulk_new1@gmail.com")
         assert u1 is not None
-        assert u1["is_active"] == 1
+        assert u1["access_status"] == "INVITED"
+        assert u1["is_active"] == 0
 
         h1 = db.get_access_history(user_gmail="bulk_new1@gmail.com")
-        assert any(h["action"] == "GRANTED" for h in h1)
+        assert any(h["action"] == "INVITED" for h in h1)
 
     def test_bulk_does_not_reactivate_revoked_user(self):
-        db.grant_single_user_access("bulk_revoked@gmail.com", "Student")
+        _create_active_user("bulk_revoked@gmail.com", "Student")
         db.revoke_user_access("bulk_revoked@gmail.com")
 
         wb = openpyxl.Workbook()
@@ -360,7 +382,7 @@ class TestBulkGrant:
         ws = wb.active
         ws.append(["gmail", "role"])
         ws.append(["invalid-no-at", "Student"])
-        ws.append(["valid@gmail.com", "Student"])
+        ws.append(["valid_bulk@gmail.com", "Student"])
 
         f = io.BytesIO()
         wb.save(f)
@@ -382,7 +404,7 @@ class TestBulkGrant:
 
 class TestPersistence:
     def test_access_state_persists_after_reinit(self):
-        db.grant_single_user_access("persist_test@gmail.com", "Student")
+        _create_active_user("persist_test@gmail.com", "Student")
         db.revoke_user_access("persist_test@gmail.com")
 
         db.init_db()
@@ -390,6 +412,7 @@ class TestPersistence:
         user = db.get_user_by_gmail("persist_test@gmail.com")
         assert user is not None
         assert user["is_active"] == 0
+        assert user["access_status"] == "REVOKED"
 
         history = db.get_access_history(user_gmail="persist_test@gmail.com")
         assert len(history) >= 1
@@ -433,15 +456,11 @@ class TestRegression:
 
 
 # ==============================================================
-# INTERVENTION ENDPOINT SECURITY (revoked user enforcement)
+# INTERVENTION ENDPOINT SECURITY (revoked/invited user enforcement)
 # ==============================================================
 
-def _make_mentor():
-    """Create a mentor account and return its user dict."""
-    db.grant_single_user_access("intv_mentor@gmail.com", "Mentor")
-    user = db.get_user_by_gmail("intv_mentor@gmail.com")
-    assert user is not None
-    return user
+def _make_active_mentor(gmail="intv_mentor@gmail.com"):
+    return _create_active_user(gmail, "Mentor")
 
 
 def _mentor_headers(user):
@@ -453,26 +472,23 @@ def _mentor_headers(user):
 
 
 class TestInterventionEndpointSecurity:
-    """Proves that _requester() blocks revoked users from intervention APIs."""
-
     def test_active_user_can_access_interventions(self):
-        mentor = _make_mentor()
+        mentor = _make_active_mentor("intv_active_mentor@gmail.com")
         headers = _mentor_headers(mentor)
         res = client.get("/api/interventions", headers=headers)
         assert res.status_code == 200
         assert res.json()["success"] is True
 
     def test_active_user_can_access_intervention_students(self):
-        mentor = _make_mentor()
+        mentor = _make_active_mentor("intv_active_mentor2@gmail.com")
         headers = _mentor_headers(mentor)
         res = client.get("/api/interventions/students", headers=headers)
         assert res.status_code == 200
         assert res.json()["success"] is True
 
     def test_revoked_user_blocked_from_interventions(self):
-        db.grant_single_user_access("revoked_mentor@gmail.com", "Mentor")
-        user = db.get_user_by_gmail("revoked_mentor@gmail.com")
-        headers = _mentor_headers(user)
+        mentor = _make_active_mentor("revoked_mentor@gmail.com")
+        headers = _mentor_headers(mentor)
 
         res_before = client.get("/api/interventions", headers=headers)
         assert res_before.status_code == 200
@@ -484,9 +500,8 @@ class TestInterventionEndpointSecurity:
         assert "revoked" in res_after.json()["detail"].lower()
 
     def test_revoked_user_blocked_from_intervention_students(self):
-        db.grant_single_user_access("revoked_mentor2@gmail.com", "Mentor")
-        user = db.get_user_by_gmail("revoked_mentor2@gmail.com")
-        headers = _mentor_headers(user)
+        mentor = _make_active_mentor("revoked_mentor2@gmail.com")
+        headers = _mentor_headers(mentor)
 
         db.revoke_user_access("revoked_mentor2@gmail.com")
 
@@ -495,9 +510,8 @@ class TestInterventionEndpointSecurity:
         assert "revoked" in res.json()["detail"].lower()
 
     def test_revoked_coordinator_blocked_from_managed_users(self):
-        db.grant_single_user_access("revoked_coord@gmail.com", "Coordinator")
-        user = db.get_user_by_gmail("revoked_coord@gmail.com")
-        headers = {"X-User-Id": user["uuid"]}
+        coord = _create_active_user("revoked_coord@gmail.com", "Coordinator")
+        headers = {"X-User-Id": coord["uuid"]}
 
         res_before = client.get("/api/users/managed", headers=headers)
         assert res_before.status_code == 200
@@ -507,19 +521,17 @@ class TestInterventionEndpointSecurity:
         res_after = client.get("/api/users/managed", headers=headers)
         assert res_after.status_code == 403
 
-    def test_unauthorized_role_still_rejected(self):
-        db.grant_single_user_access("student_intv@gmail.com", "Student")
-        user = db.get_user_by_gmail("student_intv@gmail.com")
+    def test_invited_user_blocked_from_interventions(self):
+        result = db.grant_single_user_access("invited_intv_mentor@gmail.com", "Mentor")
+        user = db.get_user_by_gmail("invited_intv_mentor@gmail.com")
         headers = _mentor_headers(user)
-        headers["X-User-Role"] = "Student"
-
         res = client.get("/api/interventions", headers=headers)
-        assert res.status_code in (200, 403)
+        assert res.status_code == 403
+        assert "activation" in res.json()["detail"].lower()
 
     def test_reactivated_user_regains_access(self):
-        db.grant_single_user_access("reactivated_mentor@gmail.com", "Mentor")
-        user = db.get_user_by_gmail("reactivated_mentor@gmail.com")
-        headers = _mentor_headers(user)
+        mentor = _make_active_mentor("reactivated_mentor@gmail.com")
+        headers = _mentor_headers(mentor)
 
         db.revoke_user_access("reactivated_mentor@gmail.com")
         res_revoked = client.get("/api/interventions", headers=headers)

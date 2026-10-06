@@ -1,13 +1,23 @@
 import os
 import sys
+import importlib.util
 
 # Ensure parent directory is in sys.path for direct pytest invocation
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+_bulk_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, _bulk_dir)
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import app
+# Load the bulk-upload app under a distinct module name so it does not
+# overwrite sys.modules['app'] (which must remain the root project app).
+_spec = importlib.util.spec_from_file_location(
+    "bulk_upload_app", os.path.join(_bulk_dir, "app.py"))
+_bulk_app_mod = importlib.util.module_from_spec(_spec)
+sys.modules["bulk_upload_app"] = _bulk_app_mod
+_spec.loader.exec_module(_bulk_app_mod)
+app = _bulk_app_mod.app
+
 from config import TEMPLATES_DIR
 import database as db
 
@@ -26,6 +36,8 @@ def setup_database():
     conn.commit()
     conn.close()
     db.init_db()
+    import db as root_db
+    root_db.init_db()
 
 def test_health_and_root():
     res = client.get("/health")

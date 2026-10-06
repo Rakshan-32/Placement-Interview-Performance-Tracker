@@ -1,4 +1,4 @@
-function LoginForm({ onLoginSuccess }) {
+function LoginForm({ onLoginSuccess, onShowForgotPassword }) {
     const [gmail, setGmail] = React.useState('');
     const [password, setPassword] = React.useState('');
     const [showPassword, setShowPassword] = React.useState(false);
@@ -171,6 +171,18 @@ function LoginForm({ onLoginSuccess }) {
                     )}
                 </button>
             </form>
+
+            {onShowForgotPassword && (
+                <div style={{ textAlign: 'center', marginTop: '12px' }}>
+                    <button
+                        type="button"
+                        onClick={onShowForgotPassword}
+                        style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontSize: '0.9rem', textDecoration: 'underline' }}
+                    >
+                        Forgot Password?
+                    </button>
+                </div>
+            )}
 
             <div className="demo-section">
                 <span className="demo-title">Quick Test Accounts (Click to autofill):</span>

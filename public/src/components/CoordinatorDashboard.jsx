@@ -220,10 +220,33 @@ function CoordinatorDashboard({ user, onLogout }) {
         finally { setLoadingHistory(false); }
     };
 
+    const handleResendInvitation = async (gmail) => {
+        try {
+            const res = await fetch('/api/users/resend-invitation', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
+                body: JSON.stringify({ gmail })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                let msg = data.message;
+                if (data.dev_activation_url) {
+                    msg += ' (Dev link copied to console)';
+                    console.log('Dev activation URL:', data.dev_activation_url);
+                }
+                setToastMessage(msg);
+                fetchManagedUsers();
+            } else {
+                setToastMessage(data.detail || data.message || 'Failed to resend invitation.');
+            }
+        } catch (err) { setToastMessage('Network error resending invitation.'); }
+        setTimeout(() => setToastMessage(''), 5000);
+    };
+
     const filteredUsers = managedUsers.filter(u => {
         const matchSearch = u.gmail.toLowerCase().includes(userSearchTerm.toLowerCase());
         const matchRole = userRoleFilter === 'All' || u.role === userRoleFilter;
-        const statusLabel = u.is_active ? 'ACTIVE' : 'REVOKED';
+        const statusLabel = u.access_status || (u.is_active ? 'ACTIVE' : 'REVOKED');
         const matchStatus = userStatusFilter === 'All' || userStatusFilter === statusLabel;
         return matchSearch && matchRole && matchStatus;
     });
@@ -346,6 +369,7 @@ function CoordinatorDashboard({ user, onLogout }) {
                             <select value={userStatusFilter} onChange={(e) => setUserStatusFilter(e.target.value)} style={{ padding: '9px 14px', borderRadius: '6px', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', fontSize: '0.9rem' }}>
                                 <option value="All">All Status</option>
                                 <option value="ACTIVE">Active</option>
+                                <option value="INVITED">Invited</option>
                                 <option value="REVOKED">Revoked</option>
                             </select>
                             <button type="button" className="btn-upload-access" onClick={() => setIsUserAccessModalOpen(true)} style={{ whiteSpace: 'nowrap' }}>
@@ -394,17 +418,24 @@ function CoordinatorDashboard({ user, onLogout }) {
                                                     )}
                                                 </td>
                                                 <td>
-                                                    <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600', background: u.is_active ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: u.is_active ? '#34d399' : '#f87171', border: `1px solid ${u.is_active ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}` }}>
-                                                        {u.is_active ? 'ACTIVE' : 'REVOKED'}
-                                                    </span>
+                                                    {(() => {
+                                                        const st = u.access_status || (u.is_active ? 'ACTIVE' : 'REVOKED');
+                                                        const colors = { ACTIVE: { bg: 'rgba(16,185,129,0.15)', fg: '#34d399', bd: 'rgba(16,185,129,0.3)' }, INVITED: { bg: 'rgba(251,191,36,0.15)', fg: '#fbbf24', bd: 'rgba(251,191,36,0.3)' }, REVOKED: { bg: 'rgba(239,68,68,0.15)', fg: '#f87171', bd: 'rgba(239,68,68,0.3)' } };
+                                                        const c = colors[st] || colors.REVOKED;
+                                                        return <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600', background: c.bg, color: c.fg, border: `1px solid ${c.bd}` }}>{st}</span>;
+                                                    })()}
                                                 </td>
                                                 <td style={{ color: '#94a3b8', fontSize: '0.85rem' }}>{u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
                                                 <td style={{ textAlign: 'right' }}>
-                                                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                                                        {u.is_active ? (
+                                                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                                        {(u.access_status || (u.is_active ? 'ACTIVE' : 'REVOKED')) === 'ACTIVE' && (
                                                             <button onClick={() => setConfirmRevoke(u)} style={{ padding: '5px 12px', borderRadius: '6px', background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '600' }}>Revoke</button>
-                                                        ) : (
+                                                        )}
+                                                        {(u.access_status || (u.is_active ? 'ACTIVE' : 'REVOKED')) === 'REVOKED' && (
                                                             <button onClick={() => handleReactivate(u.gmail)} style={{ padding: '5px 12px', borderRadius: '6px', background: 'rgba(16,185,129,0.15)', color: '#34d399', border: '1px solid rgba(16,185,129,0.3)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '600' }}>Reactivate</button>
+                                                        )}
+                                                        {(u.access_status || (u.is_active ? 'ACTIVE' : 'REVOKED')) === 'INVITED' && (
+                                                            <button onClick={() => handleResendInvitation(u.gmail)} style={{ padding: '5px 12px', borderRadius: '6px', background: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '600' }}>Resend Invitation</button>
                                                         )}
                                                         <button onClick={() => fetchAccessHistory(u.gmail)} style={{ padding: '5px 12px', borderRadius: '6px', background: 'rgba(37,99,235,0.15)', color: '#60a5fa', border: '1px solid rgba(37,99,235,0.3)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '500' }}>History</button>
                                                     </div>

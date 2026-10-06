@@ -7,7 +7,6 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
     // Single Student Form State
     const [singleGmail, setSingleGmail] = React.useState('');
     const [singleRole, setSingleRole] = React.useState('Student');
-    const [singlePassword, setSinglePassword] = React.useState('');
 
     // Bulk File Form State
     const [selectedRole, setSelectedRole] = React.useState('Student');
@@ -18,6 +17,7 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
     const [errorMsg, setErrorMsg] = React.useState('');
     const [successMsg, setSuccessMsg] = React.useState('');
     const [summaryReport, setSummaryReport] = React.useState(null);
+    const [devActivationUrl, setDevActivationUrl] = React.useState(null);
 
     const handleFileChange = (e) => {
         const selected = e.target.files[0];
@@ -39,6 +39,7 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
         }
 
         setLoading(true);
+        setDevActivationUrl(null);
 
         try {
             const headers = { 'Content-Type': 'application/json' };
@@ -48,20 +49,21 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
                 headers,
                 body: JSON.stringify({
                     gmail: singleGmail.trim(),
-                    role: singleRole,
-                    password: singlePassword.trim() || undefined
+                    role: singleRole
                 })
             });
 
             const data = await res.json();
 
             if (res.ok && data.success) {
-                setSuccessMsg(`Access granted to ${singleGmail} (${singleRole} Role).`);
+                setSuccessMsg(data.message || `Invitation sent to ${singleGmail} (${singleRole}).`);
+                if (data.dev_activation_url) {
+                    setDevActivationUrl(data.dev_activation_url);
+                }
                 setSingleGmail('');
-                setSinglePassword('');
                 if (onAccessGranted) onAccessGranted(data);
             } else if (res.status === 409) {
-                setErrorMsg(data.message || 'Account is revoked. Use Reactivate to restore access.');
+                setErrorMsg(data.message || 'Account already exists. Check the user list for current status.');
             } else {
                 setErrorMsg(data.message || 'Failed to grant user access.');
             }
@@ -120,6 +122,7 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
         setSummaryReport(null);
         setErrorMsg('');
         setSuccessMsg('');
+        setDevActivationUrl(null);
     };
 
     return (
@@ -181,6 +184,13 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
                     </div>
                 )}
 
+                {devActivationUrl && (
+                    <div style={{ padding: '10px 14px', borderRadius: '6px', marginBottom: '16px', fontSize: '0.85rem', background: 'rgba(168,85,247,0.15)', color: '#c084fc', border: '1px solid rgba(168,85,247,0.3)', wordBreak: 'break-all' }}>
+                        <strong>Dev Mode — Activation Link:</strong><br />
+                        <a href={devActivationUrl} style={{ color: '#c084fc' }}>{devActivationUrl}</a>
+                    </div>
+                )}
+
                 {/* MODE 1: SINGLE USER ACCESS FORM */}
                 {grantMode === 'single' && (
                     <form onSubmit={handleSingleSubmit} className="modal-form">
@@ -227,24 +237,9 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
                             </select>
                         </div>
 
-                        <div className="input-field" style={{ marginBottom: '20px' }}>
-                            <label style={{ color: '#f8fafc', fontWeight: '500', marginBottom: '6px', display: 'block' }}>Set Account Password *</label>
-                            <input
-                                type="text"
-                                placeholder="Enter password (e.g. StudentPass123)"
-                                value={singlePassword}
-                                onChange={(e) => setSinglePassword(e.target.value)}
-                                style={{
-                                    width: '100%',
-                                    padding: '10px 14px',
-                                    borderRadius: '6px',
-                                    background: '#0f172a',
-                                    border: '1px solid #334155',
-                                    color: '#f8fafc'
-                                }}
-                            />
-                            <span style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '4px', display: 'block' }}>
-                                Enter a password for this user, or leave blank to assign role default (<strong>{singleRole === 'Student' ? 'student123' : singleRole === 'Mentor' ? 'mentor123' : 'user123'}</strong>).
+                        <div style={{ padding: '10px 14px', borderRadius: '6px', background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.25)', marginBottom: '20px' }}>
+                            <span style={{ fontSize: '0.85rem', color: '#93c5fd' }}>
+                                An invitation will be sent to the user. They will set their own password during activation.
                             </span>
                         </div>
 
@@ -254,7 +249,7 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
                                 Cancel
                             </button>
                             <button type="submit" className="btn-submit" disabled={loading || !singleGmail}>
-                                {loading ? 'Granting Access...' : 'Grant Single User Access'}
+                                {loading ? 'Sending Invitation...' : 'Send Invitation'}
                             </button>
                         </div>
                     </form>
@@ -269,21 +264,21 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
                                     <polyline points="20 6 9 17 4 12"></polyline>
                                 </svg>
                             </div>
-                            <h4>User Access Granted Successfully!</h4>
+                            <h4>Bulk Invitations Processed!</h4>
                             <p className="summary-desc">{summaryReport.message}</p>
 
                             <div className="summary-metrics">
                                 <div className="sum-stat">
-                                    <span className="val">{summaryReport.created_count}</span>
-                                    <span className="lbl">New Accounts Created</span>
+                                    <span className="val">{summaryReport.invited_count ?? summaryReport.created_count ?? 0}</span>
+                                    <span className="lbl">Invitations Sent</span>
                                 </div>
                                 <div className="sum-stat">
-                                    <span className="val">{summaryReport.updated_count}</span>
+                                    <span className="val">{summaryReport.updated_count ?? 0}</span>
                                     <span className="lbl">Roles Updated</span>
                                 </div>
                                 <div className="sum-stat">
-                                    <span className="val">{summaryReport.skipped_count}</span>
-                                    <span className="lbl">Skipped Rows</span>
+                                    <span className="val">{summaryReport.skipped_count ?? 0}</span>
+                                    <span className="lbl">Skipped</span>
                                 </div>
                             </div>
 
@@ -318,7 +313,6 @@ function UploadUserAccessModal({ isOpen, onClose, onAccessGranted, userUuid }) {
                                 <div className="template-columns-info">
                                     <span className="col-badge required">User Email / gmail *</span>
                                     <span className="col-badge optional">Role (Student, Mentor...)</span>
-                                    <span className="col-badge optional">Password</span>
                                 </div>
 
                                 <div className="template-download-actions">

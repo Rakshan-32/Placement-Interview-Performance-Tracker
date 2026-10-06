@@ -1,8 +1,35 @@
 import sqlite3
 import uuid
 import os
+import secrets
+import hashlib
+import time
+
+import bcrypt
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "database.db")
+
+TOKEN_EXPIRY_ACTIVATION = 48 * 3600  # 48 hours
+TOKEN_EXPIRY_RESET = 1 * 3600  # 1 hour
+MIN_PASSWORD_LENGTH = 6
+
+
+def _hash_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+def hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(plain: str, stored: str) -> bool:
+    if stored.startswith("$2b$") or stored.startswith("$2a$"):
+        return bcrypt.checkpw(plain.encode(), stored.encode())
+    return plain == stored
+
+
+def is_hashed(stored: str) -> bool:
+    return stored.startswith("$2b$") or stored.startswith("$2a$")
 
 
 
@@ -236,6 +263,36 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Create auth_tokens table for activation and password reset tokens
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            id TEXT PRIMARY KEY,
+            user_uuid TEXT NOT NULL,
+            token_hash TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            used_at REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+    # Migration: add access_status column to authenticate
+    try:
+        cursor.execute("ALTER TABLE authenticate ADD COLUMN access_status TEXT DEFAULT 'ACTIVE'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    # Backfill access_status for existing rows
+    cursor.execute("""
+        UPDATE authenticate SET access_status = CASE
+            WHEN is_active = 0 THEN 'REVOKED'
+            ELSE 'ACTIVE'
+        END
+        WHERE access_status IS NULL OR access_status = ''
+    """)
     conn.commit()
 
     # Seed demo users if empty
@@ -331,7 +388,7 @@ def get_user_by_gmail(gmail: str):
     """Fetch user record from 'authenticate' table by gmail."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT uuid, gmail, password, role, department, is_active FROM authenticate WHERE LOWER(gmail) = LOWER(?)", (gmail.strip(),))
+    cursor.execute("SELECT uuid, gmail, password, role, department, is_active, access_status FROM authenticate WHERE LOWER(gmail) = LOWER(?)", (gmail.strip(),))
     user = cursor.fetchone()
     conn.close()
     if user:
@@ -343,7 +400,7 @@ def get_user_by_id(user_id: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT uuid, gmail, password, role, department, is_active FROM authenticate WHERE uuid = ?",
+        "SELECT uuid, gmail, password, role, department, is_active, access_status FROM authenticate WHERE uuid = ?",
         (user_id,)
     )
     user = cursor.fetchone()
@@ -354,7 +411,7 @@ def get_all_users():
     """Retrieve all accounts (without secrets) for user management."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT uuid, gmail, role, is_active, created_at FROM authenticate ORDER BY created_at DESC")
+    cursor.execute("SELECT uuid, gmail, role, is_active, access_status, created_at FROM authenticate ORDER BY created_at DESC")
     users = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return users
@@ -794,38 +851,48 @@ def bulk_grant_user_access(users_list: list):
 
 def grant_single_user_access(gmail: str, role: str = "Student", password: str = None,
                               actor_uuid: str = None, actor_gmail: str = None):
-    """Grant or update access for a single user in 'authenticate' table."""
+    """Grant or update access for a single user. New users start as INVITED. Returns dict with activation_token for new users."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     gmail_clean = gmail.strip().lower()
 
-    # Normalize role casing
     normalized = normalize_role(role)
     if normalized:
         role = normalized
 
-    cursor.execute("SELECT uuid, role, password, is_active FROM authenticate WHERE LOWER(gmail) = ?", (gmail_clean,))
+    cursor.execute("SELECT uuid, role, password, is_active, access_status FROM authenticate WHERE LOWER(gmail) = ?", (gmail_clean,))
     existing = cursor.fetchone()
 
     if existing:
         existing = dict(existing)
-        if not existing["is_active"]:
+        status = existing.get("access_status") or ("ACTIVE" if existing["is_active"] else "REVOKED")
+
+        if status == "REVOKED":
             conn.close()
             return {
                 "uuid": existing["uuid"],
                 "gmail": gmail_clean,
                 "role": existing["role"],
                 "action": "Revoked - use reactivate",
-                "is_active": False
+                "is_active": False,
+                "access_status": "REVOKED"
             }
+
+        if status == "INVITED":
+            conn.close()
+            return {
+                "uuid": existing["uuid"],
+                "gmail": gmail_clean,
+                "role": existing["role"],
+                "action": "Already Invited - use resend",
+                "is_active": 0,
+                "access_status": "INVITED"
+            }
+
         old_role = existing["role"]
-        final_pwd = password.strip() if (password and password.strip()) else existing["password"]
-        if password and password.strip():
-            cursor.execute("UPDATE authenticate SET role = ?, password = ? WHERE LOWER(gmail) = ?", (role, final_pwd, gmail_clean))
-        else:
-            cursor.execute("UPDATE authenticate SET role = ? WHERE LOWER(gmail) = ?", (role, gmail_clean))
         if old_role != role:
+            cursor.execute("UPDATE authenticate SET role = ? WHERE LOWER(gmail) = ?", (role, gmail_clean))
             record_access_history(conn, existing["uuid"], gmail_clean, "ROLE_UPDATED",
                                   actor_uuid=actor_uuid, actor_gmail=actor_gmail,
                                   old_role=old_role, new_role=role,
@@ -837,31 +904,35 @@ def grant_single_user_access(gmail: str, role: str = "Student", password: str = 
             "uuid": existing["uuid"],
             "gmail": gmail_clean,
             "role": role,
-            "password": final_pwd,
-            "action": "Updated Role & Password" if (password and password.strip()) else "Updated Role",
-            "is_active": True
+            "action": "Updated Role" if old_role != role else "Already Active",
+            "is_active": True,
+            "access_status": "ACTIVE"
         }
     else:
-        final_pwd = password.strip() if (password and password.strip()) else ("student123" if role == "Student" else "mentor123" if role == "Mentor" else "dept123" if role == "Department" else "coord123" if role == "Coordinator" else "recruiter123" if role == "Recruiter" else "user123")
-        new_uuid = str(uuid.uuid4())
+        # New user: create as INVITED
+        user_uuid = str(uuid.uuid4())
+        placeholder_pwd = "!INVITED_NO_PASSWORD!"
         cursor.execute("""
-            INSERT INTO authenticate (uuid, gmail, password, role, is_active)
-            VALUES (?, ?, ?, ?, 1)
-        """, (new_uuid, gmail_clean, final_pwd, role))
-        record_access_history(conn, new_uuid, gmail_clean, "GRANTED",
+            INSERT INTO authenticate (uuid, gmail, password, role, is_active, access_status)
+            VALUES (?, ?, ?, ?, 0, 'INVITED')
+        """, (user_uuid, gmail_clean, placeholder_pwd, role))
+        record_access_history(conn, user_uuid, gmail_clean, "INVITED",
                               actor_uuid=actor_uuid, actor_gmail=actor_gmail,
                               old_role=None, new_role=role,
-                              old_status=None, new_status="ACTIVE")
+                              old_status=None, new_status="INVITED")
         conn.commit()
         conn.close()
 
+        raw_token = create_auth_token(user_uuid, "ACTIVATION")
+
         return {
-            "uuid": new_uuid,
+            "uuid": user_uuid,
             "gmail": gmail_clean,
             "role": role,
-            "password": final_pwd,
-            "action": "Created Account",
-            "is_active": True
+            "action": "Invited",
+            "is_active": 0,
+            "access_status": "INVITED",
+            "activation_token": raw_token
         }
 
 
@@ -1354,12 +1425,14 @@ def upsert_user_account(email: str, role: str = "Student", password: str = None,
 
     normalized_role = normalize_role(role) or "Student"
 
-    cursor.execute("SELECT uuid, password, role, is_active FROM authenticate WHERE LOWER(gmail) = ?", (email_clean,))
+    cursor.execute("SELECT uuid, password, role, is_active, access_status FROM authenticate WHERE LOWER(gmail) = ?", (email_clean,))
     existing = cursor.fetchone()
 
     if existing:
         existing = dict(existing)
-        if not existing["is_active"]:
+        status = existing.get("access_status") or ("ACTIVE" if existing["is_active"] else "REVOKED")
+
+        if status == "REVOKED":
             conn.close()
             return {
                 "uuid": existing["uuid"],
@@ -1367,49 +1440,53 @@ def upsert_user_account(email: str, role: str = "Student", password: str = None,
                 "role": existing["role"],
                 "action": "Skipped (Revoked)"
             }
+        if status == "INVITED":
+            conn.close()
+            return {
+                "uuid": existing["uuid"],
+                "gmail": email_clean,
+                "role": existing["role"],
+                "action": "Skipped (Invited)"
+            }
+
         old_role = existing["role"]
-        final_password = password if password else existing["password"]
-        cursor.execute("""
-            UPDATE authenticate
-            SET role = ?, password = ?
-            WHERE LOWER(gmail) = ?
-        """, (normalized_role, final_password, email_clean))
         if old_role != normalized_role:
+            cursor.execute("UPDATE authenticate SET role = ? WHERE LOWER(gmail) = ?", (normalized_role, email_clean))
             record_access_history(conn, existing["uuid"], email_clean, "ROLE_UPDATED",
                                   actor_uuid=actor_uuid, actor_gmail=actor_gmail,
                                   old_role=old_role, new_role=normalized_role,
                                   old_status="ACTIVE", new_status="ACTIVE")
-        action = "Updated"
+        action = "Updated" if old_role != normalized_role else "Unchanged"
         user_uuid = existing["uuid"]
     else:
+        # New user via bulk: create as INVITED
         user_uuid = str(uuid.uuid4())
-        default_pwds = {
-            "Student": "student123",
-            "Mentor": "mentor123",
-            "Coordinator": "coord123",
-            "Department": "dept123",
-            "Recruiter": "recruiter123"
-        }
-        final_password = password if password else default_pwds.get(normalized_role, f"{normalized_role.lower()}123")
+        placeholder_pwd = "!INVITED_NO_PASSWORD!"
         cursor.execute("""
-            INSERT INTO authenticate (uuid, gmail, password, role, is_active)
-            VALUES (?, ?, ?, ?, 1)
-        """, (user_uuid, email_clean, final_password, normalized_role))
-        record_access_history(conn, user_uuid, email_clean, "GRANTED",
+            INSERT INTO authenticate (uuid, gmail, password, role, is_active, access_status)
+            VALUES (?, ?, ?, ?, 0, 'INVITED')
+        """, (user_uuid, email_clean, placeholder_pwd, normalized_role))
+        record_access_history(conn, user_uuid, email_clean, "INVITED",
                               actor_uuid=actor_uuid, actor_gmail=actor_gmail,
                               old_role=None, new_role=normalized_role,
-                              old_status=None, new_status="ACTIVE")
-        action = "Created"
+                              old_status=None, new_status="INVITED")
+        action = "Invited"
 
     conn.commit()
     conn.close()
 
-    return {
+    result = {
         "uuid": user_uuid,
         "gmail": email_clean,
         "role": normalized_role,
         "action": action
     }
+
+    if action == "Invited":
+        raw_token = create_auth_token(user_uuid, "ACTIVATION")
+        result["activation_token"] = raw_token
+
+    return result
 
 def upsert_student_roster_record(register_number: str, name: str, email: str, department: str,
                                  cgpa: float, tenth: float = None, twelfth: float = None, skills: str = ""):
@@ -1516,26 +1593,28 @@ def revoke_user_access(target_gmail: str, actor_uuid: str = None, actor_gmail: s
     cursor = conn.cursor()
     target_clean = target_gmail.strip().lower()
 
-    cursor.execute("SELECT uuid, gmail, role, is_active FROM authenticate WHERE LOWER(gmail) = ?", (target_clean,))
+    cursor.execute("SELECT uuid, gmail, role, is_active, access_status FROM authenticate WHERE LOWER(gmail) = ?", (target_clean,))
     user = cursor.fetchone()
     if not user:
         conn.close()
         return None, "User not found"
 
     user = dict(user)
-    old_status = "ACTIVE" if user["is_active"] else "REVOKED"
-    if not user["is_active"]:
+    status = user.get("access_status") or ("ACTIVE" if user["is_active"] else "REVOKED")
+    if status == "REVOKED":
         conn.close()
         return user, "already_revoked"
 
-    cursor.execute("UPDATE authenticate SET is_active = 0 WHERE uuid = ?", (user["uuid"],))
+    old_status = status
+    cursor.execute("UPDATE authenticate SET is_active = 0, access_status = 'REVOKED' WHERE uuid = ?", (user["uuid"],))
     record_access_history(conn, user["uuid"], user["gmail"], "REVOKED",
                           actor_uuid=actor_uuid, actor_gmail=actor_gmail,
                           old_role=user["role"], new_role=user["role"],
-                          old_status="ACTIVE", new_status="REVOKED")
+                          old_status=old_status, new_status="REVOKED")
     conn.commit()
     conn.close()
     user["is_active"] = 0
+    user["access_status"] = "REVOKED"
     return user, "revoked"
 
 
@@ -1544,18 +1623,24 @@ def reactivate_user_access(target_gmail: str, actor_uuid: str = None, actor_gmai
     cursor = conn.cursor()
     target_clean = target_gmail.strip().lower()
 
-    cursor.execute("SELECT uuid, gmail, role, is_active FROM authenticate WHERE LOWER(gmail) = ?", (target_clean,))
+    cursor.execute("SELECT uuid, gmail, role, is_active, access_status FROM authenticate WHERE LOWER(gmail) = ?", (target_clean,))
     user = cursor.fetchone()
     if not user:
         conn.close()
         return None, "User not found"
 
     user = dict(user)
-    if user["is_active"]:
+    status = user.get("access_status") or ("ACTIVE" if user["is_active"] else "REVOKED")
+
+    if status == "ACTIVE":
         conn.close()
         return user, "already_active"
 
-    cursor.execute("UPDATE authenticate SET is_active = 1 WHERE uuid = ?", (user["uuid"],))
+    if status == "INVITED":
+        conn.close()
+        return user, "invited_not_activated"
+
+    cursor.execute("UPDATE authenticate SET is_active = 1, access_status = 'ACTIVE' WHERE uuid = ?", (user["uuid"],))
     record_access_history(conn, user["uuid"], user["gmail"], "REACTIVATED",
                           actor_uuid=actor_uuid, actor_gmail=actor_gmail,
                           old_role=user["role"], new_role=user["role"],
@@ -1563,6 +1648,7 @@ def reactivate_user_access(target_gmail: str, actor_uuid: str = None, actor_gmai
     conn.commit()
     conn.close()
     user["is_active"] = 1
+    user["access_status"] = "ACTIVE"
     return user, "reactivated"
 
 
@@ -1619,6 +1705,223 @@ def get_access_history(user_gmail: str = None, limit: int = 200):
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
+
+
+# ==============================================================
+# INVITATION / ACTIVATION / RESET TOKEN FUNCTIONS
+# ==============================================================
+
+def create_auth_token(user_uuid: str, purpose: str, expiry_seconds: int = None) -> str:
+    """Generate a secure token, store its hash, return the raw token."""
+    if expiry_seconds is None:
+        expiry_seconds = TOKEN_EXPIRY_ACTIVATION if purpose == "ACTIVATION" else TOKEN_EXPIRY_RESET
+    raw_token = secrets.token_urlsafe(48)
+    token_hash = _hash_token(raw_token)
+    token_id = str(uuid.uuid4())
+    expires_at = time.time() + expiry_seconds
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Invalidate previous unused tokens of the same purpose for this user
+    cursor.execute("""
+        UPDATE auth_tokens SET used_at = ?
+        WHERE user_uuid = ? AND purpose = ? AND used_at IS NULL
+    """, (time.time(), user_uuid, purpose))
+    cursor.execute("""
+        INSERT INTO auth_tokens (id, user_uuid, token_hash, purpose, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (token_id, user_uuid, token_hash, purpose, expires_at))
+    conn.commit()
+    conn.close()
+    return raw_token
+
+
+def validate_auth_token(raw_token: str, purpose: str) -> dict:
+    """Validate a token. Returns {valid, user_uuid, error}."""
+    token_hash = _hash_token(raw_token)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_uuid, purpose, expires_at, used_at
+        FROM auth_tokens WHERE token_hash = ? AND purpose = ?
+    """, (token_hash, purpose))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {"valid": False, "error": "Invalid token"}
+    row = dict(row)
+    if row["used_at"] is not None:
+        return {"valid": False, "error": "Token has already been used"}
+    if time.time() > row["expires_at"]:
+        return {"valid": False, "error": "Token has expired"}
+    return {"valid": True, "user_uuid": row["user_uuid"], "token_id": row["id"]}
+
+
+def invalidate_token(raw_token: str):
+    """Mark a token as used."""
+    token_hash = _hash_token(raw_token)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE auth_tokens SET used_at = ? WHERE token_hash = ?
+    """, (time.time(), token_hash))
+    conn.commit()
+    conn.close()
+
+
+def create_invited_user(gmail: str, role: str, actor_uuid: str = None, actor_gmail: str = None):
+    """Create a new user in INVITED state (no password). Returns (user_dict, raw_activation_token)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    gmail_clean = gmail.strip().lower()
+    normalized = normalize_role(role) or "Student"
+
+    cursor.execute("SELECT uuid, gmail, role, is_active, access_status FROM authenticate WHERE LOWER(gmail) = ?", (gmail_clean,))
+    existing = cursor.fetchone()
+
+    if existing:
+        existing = dict(existing)
+        conn.close()
+        return existing, None  # Caller decides what to do
+
+    user_uuid = str(uuid.uuid4())
+    placeholder_pwd = "!INVITED_NO_PASSWORD!"
+    cursor.execute("""
+        INSERT INTO authenticate (uuid, gmail, password, role, is_active, access_status)
+        VALUES (?, ?, ?, ?, 0, 'INVITED')
+    """, (user_uuid, gmail_clean, placeholder_pwd, normalized))
+    record_access_history(conn, user_uuid, gmail_clean, "INVITED",
+                          actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                          old_role=None, new_role=normalized,
+                          old_status=None, new_status="INVITED")
+    conn.commit()
+    conn.close()
+
+    raw_token = create_auth_token(user_uuid, "ACTIVATION")
+
+    user = {
+        "uuid": user_uuid,
+        "gmail": gmail_clean,
+        "role": normalized,
+        "is_active": 0,
+        "access_status": "INVITED"
+    }
+    return user, raw_token
+
+
+def activate_user(raw_token: str, new_password: str):
+    """Activate an INVITED user: validate token, hash password, set ACTIVE. Returns (success, user_or_error)."""
+    if not new_password or len(new_password) < MIN_PASSWORD_LENGTH:
+        return False, f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
+
+    validation = validate_auth_token(raw_token, "ACTIVATION")
+    if not validation["valid"]:
+        return False, validation["error"]
+
+    user_uuid = validation["user_uuid"]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT uuid, gmail, role, access_status FROM authenticate WHERE uuid = ?", (user_uuid,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return False, "User not found"
+    user = dict(user)
+
+    if user["access_status"] != "INVITED":
+        conn.close()
+        return False, "Account is not in INVITED state"
+
+    hashed = hash_password(new_password)
+    cursor.execute("""
+        UPDATE authenticate SET password = ?, is_active = 1, access_status = 'ACTIVE'
+        WHERE uuid = ?
+    """, (hashed, user_uuid))
+    record_access_history(conn, user_uuid, user["gmail"], "ACTIVATED",
+                          old_role=user["role"], new_role=user["role"],
+                          old_status="INVITED", new_status="ACTIVE")
+    # Invalidate token
+    token_hash = _hash_token(raw_token)
+    cursor.execute("UPDATE auth_tokens SET used_at = ? WHERE token_hash = ?", (time.time(), token_hash))
+    conn.commit()
+    conn.close()
+
+    return True, {"uuid": user_uuid, "gmail": user["gmail"], "role": user["role"]}
+
+
+def request_password_reset(gmail: str):
+    """Generate a password reset token if the user exists and is ACTIVE. Returns (token_or_none, user_or_none)."""
+    user = get_user_by_gmail(gmail)
+    if not user or user.get("access_status") != "ACTIVE":
+        return None, None
+    raw_token = create_auth_token(user["uuid"], "PASSWORD_RESET", TOKEN_EXPIRY_RESET)
+    return raw_token, user
+
+
+def reset_password(raw_token: str, new_password: str):
+    """Reset password using a valid reset token. Returns (success, message)."""
+    if not new_password or len(new_password) < MIN_PASSWORD_LENGTH:
+        return False, f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
+
+    validation = validate_auth_token(raw_token, "PASSWORD_RESET")
+    if not validation["valid"]:
+        return False, validation["error"]
+
+    user_uuid = validation["user_uuid"]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT uuid, gmail, role FROM authenticate WHERE uuid = ?", (user_uuid,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return False, "User not found"
+    user = dict(user)
+
+    hashed = hash_password(new_password)
+    cursor.execute("UPDATE authenticate SET password = ? WHERE uuid = ?", (hashed, user_uuid))
+    record_access_history(conn, user_uuid, user["gmail"], "PASSWORD_RESET",
+                          old_role=user["role"], new_role=user["role"],
+                          old_status="ACTIVE", new_status="ACTIVE")
+    token_hash = _hash_token(raw_token)
+    cursor.execute("UPDATE auth_tokens SET used_at = ? WHERE token_hash = ?", (time.time(), token_hash))
+    conn.commit()
+    conn.close()
+
+    return True, "Password reset successfully"
+
+
+def resend_invitation(gmail: str, actor_uuid: str = None, actor_gmail: str = None):
+    """Resend invitation for an INVITED user: invalidate old tokens, generate new. Returns (user, raw_token) or (None, error)."""
+    user = get_user_by_gmail(gmail)
+    if not user:
+        return None, "User not found"
+    if user.get("access_status") != "INVITED":
+        return None, f"User is {user.get('access_status')}, not INVITED"
+
+    raw_token = create_auth_token(user["uuid"], "ACTIVATION")
+
+    conn = get_db_connection()
+    record_access_history(conn, user["uuid"], user["gmail"], "INVITATION_RESENT",
+                          actor_uuid=actor_uuid, actor_gmail=actor_gmail,
+                          old_role=user["role"], new_role=user["role"],
+                          old_status="INVITED", new_status="INVITED")
+    conn.commit()
+    conn.close()
+
+    return user, raw_token
+
+
+def migrate_legacy_password(user_uuid: str, plain_password: str):
+    """Hash a legacy plaintext password after successful login verification."""
+    hashed = hash_password(plain_password)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE authenticate SET password = ? WHERE uuid = ?", (hashed, user_uuid))
+    conn.commit()
+    conn.close()
 
 
 if __name__ == "__main__":

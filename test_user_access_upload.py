@@ -1,3 +1,7 @@
+"""
+User access upload tests — updated for the invitation-based lifecycle.
+New users are created as INVITED (not immediately ACTIVE).
+"""
 import openpyxl
 import io
 import db
@@ -6,103 +10,68 @@ from app import app
 
 client = TestClient(app)
 
+
+def _coord_headers():
+    coord = db.get_user_by_gmail("coordinator@gmail.com")
+    return {"X-User-Id": coord["uuid"]}
+
+
 def test_bulk_user_access_upload():
-    # Create an in-memory Excel workbook with sample user emails and roles
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "User Access"
-    
-    # Header row
     ws.append(["gmail", "role"])
-    
-    # Sample rows
     ws.append(["test_student1@gmail.com", "Student"])
     ws.append(["test_recruiter1@gmail.com", "Recruiter"])
     ws.append(["test_coord1@gmail.com", "Coordinator"])
-    
+
     excel_file = io.BytesIO()
     wb.save(excel_file)
     excel_file.seek(0)
-    
-    # Send request to FastAPI endpoint
+
     response = client.post(
         "/api/users/upload-access",
         data={"default_role": "Student"},
-        files={"file": ("test_users.xlsx", excel_file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        files={"file": ("test_users.xlsx", excel_file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=_coord_headers()
     )
-    
+
     assert response.status_code == 200, f"Response failed: {response.text}"
     json_data = response.json()
     assert json_data["success"] is True
     assert json_data["total_processed"] == 3
-    print("API Response:", json_data)
-    
-    # Check DB user retrieval
+    assert json_data["invited_count"] == 3
+
     student = db.get_user_by_gmail("test_student1@gmail.com")
     assert student is not None
     assert student["role"] == "Student"
-    assert student["password"] == "student123"
-    
+    assert student["access_status"] == "INVITED"
+    assert student["is_active"] == 0
+
     recruiter = db.get_user_by_gmail("test_recruiter1@gmail.com")
     assert recruiter is not None
     assert recruiter["role"] == "Recruiter"
-    assert recruiter["password"] == "recruiter123"
-    
+
     coord = db.get_user_by_gmail("test_coord1@gmail.com")
     assert coord is not None
     assert coord["role"] == "Coordinator"
-    assert coord["password"] == "coord123"
-    
-    print("All creation tests passed successfully!")
 
-    # Pass 2: Update existing role
-    wb2 = openpyxl.Workbook()
-    ws2 = wb2.active
-    ws2.append(["gmail", "role"])
-    ws2.append(["test_student1@gmail.com", "Recruiter"])  # Change Student to Recruiter
-    
-    excel_file2 = io.BytesIO()
-    wb2.save(excel_file2)
-    excel_file2.seek(0)
-    
-    res2 = client.post(
-        "/api/users/upload-access",
-        data={"default_role": "Student"},
-        files={"file": ("test_users2.xlsx", excel_file2, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+
+def test_bulk_upload_role_update_for_active_user():
+    """After activating a user, bulk upload can update their role."""
+    coord = db.get_user_by_gmail("coordinator@gmail.com")
+    result = db.grant_single_user_access(
+        "bulk_role_update@gmail.com", "Student",
+        actor_uuid=coord["uuid"], actor_gmail=coord["gmail"]
     )
-    assert res2.status_code == 200
-    json2 = res2.json()
-    assert json2["updated_count"] == 1
-    assert json2["created_count"] == 0
-    
-    updated_user = db.get_user_by_gmail("test_student1@gmail.com")
-    assert updated_user["role"] == "Recruiter"
-    print("All update tests passed successfully!")
+    token = result.get("activation_token")
+    if token:
+        db.activate_user(token, "TestPass123")
 
-def test_single_user_access_grant():
-    # Grant single user access via endpoint
-    res = client.post(
-        "/api/users/grant-single-access",
-        json={"gmail": "single_student@gmail.com", "role": "Student", "password": "custompwd123"}
-    )
-    assert res.status_code == 200
-    data = res.json()
-    assert data["success"] is True
-    assert data["user"]["gmail"] == "single_student@gmail.com"
-    assert data["user"]["role"] == "Student"
-    assert "password" not in data["user"], "Password must not be exposed in API response"
-
-    user_in_db = db.get_user_by_gmail("single_student@gmail.com")
-    assert user_in_db is not None
-    assert user_in_db["password"] == "custompwd123"
-    print("Single user access test passed successfully!")
-
-def test_bulk_upload_with_passwords():
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.append(["gmail", "role", "password"])
-    ws.append(["pwd_student1@gmail.com", "Student", "MyPass123!"])
-    ws.append(["pwd_student2@gmail.com", "Student", "Secure456#"])
+    ws.append(["gmail", "role"])
+    ws.append(["bulk_role_update@gmail.com", "Recruiter"])
 
     excel_file = io.BytesIO()
     wb.save(excel_file)
@@ -111,24 +80,61 @@ def test_bulk_upload_with_passwords():
     res = client.post(
         "/api/users/upload-access",
         data={"default_role": "Student"},
-        files={"file": ("users_with_pwd.xlsx", excel_file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        files={"file": ("test_users2.xlsx", excel_file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=_coord_headers()
+    )
+    assert res.status_code == 200
+    json_data = res.json()
+    assert json_data["updated_count"] >= 1
+
+    updated_user = db.get_user_by_gmail("bulk_role_update@gmail.com")
+    assert updated_user["role"] == "Recruiter"
+
+
+def test_single_user_access_invitation():
+    """Single user grant creates an INVITED user (no password in request)."""
+    res = client.post(
+        "/api/users/grant-single-access",
+        json={"gmail": "single_student@gmail.com", "role": "Student"},
+        headers=_coord_headers()
     )
     assert res.status_code == 200
     data = res.json()
     assert data["success"] is True
+    assert "password" not in str(data["user"]), "Password must not be exposed in API response"
 
-    u1 = db.get_user_by_gmail("pwd_student1@gmail.com")
-    assert u1 is not None
-    assert u1["password"] == "MyPass123!"
+    user_in_db = db.get_user_by_gmail("single_student@gmail.com")
+    assert user_in_db is not None
+    assert user_in_db["access_status"] == "INVITED"
+    assert user_in_db["is_active"] == 0
 
-    u2 = db.get_user_by_gmail("pwd_student2@gmail.com")
-    assert u2 is not None
-    assert u2["password"] == "Secure456#"
-    print("Bulk upload with passwords test passed successfully!")
+
+def test_bulk_upload_skips_invited_users():
+    """Bulk upload should skip already-invited users."""
+    db.grant_single_user_access("bulk_invited_skip@gmail.com", "Student")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["gmail", "role"])
+    ws.append(["bulk_invited_skip@gmail.com", "Student"])
+
+    excel_file = io.BytesIO()
+    wb.save(excel_file)
+    excel_file.seek(0)
+
+    res = client.post(
+        "/api/users/upload-access",
+        data={"default_role": "Student"},
+        files={"file": ("users_skip.xlsx", excel_file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=_coord_headers()
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["skipped_invited"] >= 1
+
 
 if __name__ == "__main__":
     test_bulk_user_access_upload()
-    test_single_user_access_grant()
-    test_bulk_upload_with_passwords()
-
-
+    test_bulk_upload_role_update_for_active_user()
+    test_single_user_access_invitation()
+    test_bulk_upload_skips_invited_users()

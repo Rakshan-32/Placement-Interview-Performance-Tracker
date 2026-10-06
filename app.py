@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 import db
+import email_service
 import intervention_service
 import bulk_upload_module.parser as bulk_parser
 import bulk_upload_module.exporter as bulk_exporter
@@ -44,35 +45,46 @@ class LoginRequest(BaseModel):
 async def login(credentials: LoginRequest):
     gmail = credentials.gmail.strip()
     password = credentials.password
-    
+
     if not gmail or not password:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"success": False, "message": "Gmail and password are required"}
         )
-    
-    # Query database table 'authenticate' for user record
+
     user = db.get_user_by_gmail(gmail)
-    
-    # Check if user exists and compare stored password
-    if not user or user["password"] != password:
+
+    if not user:
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={
-                "success": False,
-                "message": "Invalid Gmail or password"
-            }
+            content={"success": False, "message": "Invalid Gmail or password"}
         )
 
-    # Check if user access has been revoked
-    if not user.get("is_active", True):
+    # INVITED accounts cannot login
+    access_status = user.get("access_status") or ("ACTIVE" if user.get("is_active", True) else "REVOKED")
+    if access_status == "INVITED":
         return JSONResponse(
             status_code=status.HTTP_403_FORBIDDEN,
-            content={
-                "success": False,
-                "message": "Your account access has been revoked. Please contact the coordinator."
-            }
+            content={"success": False, "message": "Account activation is required. Please check your email for the activation link."}
         )
+
+    # REVOKED accounts cannot login
+    if access_status == "REVOKED" or not user.get("is_active", True):
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"success": False, "message": "Your account access has been revoked. Please contact the coordinator."}
+        )
+
+    # Verify password (supports both hashed and legacy plaintext)
+    if not db.verify_password(password, user["password"]):
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "Invalid Gmail or password"}
+        )
+
+    # Migrate legacy plaintext password to bcrypt on successful login
+    if not db.is_hashed(user["password"]):
+        db.migrate_legacy_password(user["uuid"], password)
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -391,9 +403,12 @@ async def upload_user_access(
         db.record_upload_log("User Access", file.filename, 0, 0, 0, status=f"FAILED: {str(e)}")
         return JSONResponse(status_code=400, content={"success": False, "message": str(e), "detail": str(e)})
 
-    created_count = 0
+    invited_count = 0
     updated_count = 0
     skipped_revoked = 0
+    skipped_invited = 0
+    email_sent_count = 0
+    email_failed_count = 0
     processed_users = []
 
     for item in records:
@@ -404,31 +419,50 @@ async def upload_user_access(
             actor_uuid=actor["uuid"] if actor else None,
             actor_gmail=actor["gmail"] if actor else None
         )
-        if res["action"] == "Created":
-            created_count += 1
+        if res["action"] == "Invited":
+            invited_count += 1
+            activation_token = res.get("activation_token")
+            if activation_token:
+                activation_url = f"{email_service.APP_BASE_URL}/#/activate/{activation_token}"
+                email_result = email_service.send_invitation_email(item["email"], item["role"], activation_url)
+                if email_result.get("sent"):
+                    email_sent_count += 1
+                else:
+                    email_failed_count += 1
+                    res["dev_activation_url"] = activation_url
+                res.pop("activation_token", None)
         elif res["action"] == "Skipped (Revoked)":
             skipped_revoked += 1
+        elif res["action"] == "Skipped (Invited)":
+            skipped_invited += 1
         else:
             updated_count += 1
         processed_users.append(res)
+
+    total_skipped = skipped_count + skipped_revoked + skipped_invited
 
     db.record_upload_log(
         upload_type="User Access Onboarding",
         filename=file.filename,
         total_rows=len(records) + skipped_count,
         processed_count=len(processed_users),
-        skipped_count=skipped_count + skipped_revoked,
+        skipped_count=total_skipped,
         status="SUCCESS"
     )
 
     return JSONResponse(status_code=status.HTTP_200_OK, content={
         "success": True,
-        "message": f"Successfully granted access to {len(processed_users)} user accounts ({created_count} created, {updated_count} updated, {skipped_revoked} skipped-revoked).",
+        "message": f"Processed {len(processed_users)} accounts ({invited_count} invited, {updated_count} updated, {skipped_revoked} skipped-revoked, {skipped_invited} skipped-invited).",
         "total_rows": len(records) + skipped_count,
         "total_processed": len(processed_users),
-        "created_count": created_count,
+        "created_count": invited_count,
+        "invited_count": invited_count,
         "updated_count": updated_count,
-        "skipped_count": skipped_count + skipped_revoked,
+        "skipped_count": total_skipped,
+        "skipped_revoked": skipped_revoked,
+        "skipped_invited": skipped_invited,
+        "email_sent": email_sent_count,
+        "email_failed": email_failed_count,
         "processed_users": processed_users,
         "users": processed_users
     })
@@ -537,7 +571,6 @@ async def upload_company_drives(file: UploadFile = File(...)):
 class GrantSingleAccessRequest(BaseModel):
     gmail: str
     role: str = "Student"
-    password: str = None
 
 def _require_coordinator(x_user_id: str = None):
     if not x_user_id:
@@ -547,7 +580,10 @@ def _require_coordinator(x_user_id: str = None):
         raise HTTPException(status_code=401, detail="Unknown user")
     if actor["role"].strip().lower() not in ("coordinator", "admin"):
         raise HTTPException(status_code=403, detail="Only Coordinators can perform this action")
-    if not actor.get("is_active", True):
+    access_status = actor.get("access_status") or ("ACTIVE" if actor.get("is_active", True) else "REVOKED")
+    if access_status == "INVITED":
+        raise HTTPException(status_code=403, detail="Account activation is required")
+    if access_status == "REVOKED" or not actor.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been revoked")
     return actor
 
@@ -566,30 +602,67 @@ async def grant_single_access(req: GrantSingleAccessRequest, x_user_id: str = He
         actor = _require_coordinator(x_user_id)
 
     result = db.grant_single_user_access(
-        gmail=gmail, role=req.role, password=req.password,
+        gmail=gmail, role=req.role,
         actor_uuid=actor["uuid"] if actor else None,
         actor_gmail=actor["gmail"] if actor else None
     )
 
-    if result.get("is_active") is False:
+    access_status = result.get("access_status", "")
+
+    if access_status == "REVOKED":
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={
                 "success": False,
                 "message": f"Account {gmail} is revoked. Use 'Reactivate' to restore access.",
-                "user": {"uuid": result["uuid"], "gmail": result["gmail"], "role": result["role"], "is_active": False}
+                "user": {"uuid": result["uuid"], "gmail": result["gmail"], "role": result["role"], "is_active": False, "access_status": "REVOKED"}
             }
         )
 
-    safe_result = {k: v for k, v in result.items() if k != "password"}
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={
-            "success": True,
-            "message": f"Successfully granted {result['role']} access to {gmail}.",
-            "user": safe_result
-        }
-    )
+    if result.get("action") == "Already Invited - use resend":
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "success": False,
+                "message": f"Account {gmail} is already invited but not yet activated. Use 'Resend Invitation'.",
+                "user": {"uuid": result["uuid"], "gmail": result["gmail"], "role": result["role"], "is_active": 0, "access_status": "INVITED"}
+            }
+        )
+
+    # For newly invited users, attempt to send email
+    email_result = {"sent": False, "delivery_mode": "none"}
+    activation_token = result.get("activation_token")
+    if activation_token:
+        activation_url = f"{email_service.APP_BASE_URL}/#/activate/{activation_token}"
+        email_result = email_service.send_invitation_email(gmail, result["role"], activation_url)
+
+    safe_result = {k: v for k, v in result.items() if k not in ("password", "activation_token")}
+
+    if result.get("action") == "Invited":
+        email_sent = email_result.get("sent", False)
+        delivery_mode = email_result.get("delivery_mode", "none")
+        if email_sent:
+            msg = f"Invitation email sent to {gmail} ({result['role']})."
+        elif delivery_mode == "development":
+            msg = f"Invitation created for {gmail} ({result['role']}), but email delivery is not configured."
+        else:
+            msg = f"Invitation created for {gmail} ({result['role']}), but the email could not be delivered."
+    else:
+        msg = f"Updated {result['role']} access for {gmail}."
+
+    resp = {
+        "success": True,
+        "message": msg,
+        "email_sent": email_result.get("sent", False),
+        "delivery_mode": email_result.get("delivery_mode", "none"),
+        "user": safe_result,
+    }
+
+    if activation_token and not email_result.get("sent"):
+        dev_activation_url = f"{email_service.APP_BASE_URL}/#/activate/{activation_token}"
+        resp["dev_activation_url"] = dev_activation_url
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content=resp)
 
 
 # ==============================================================
@@ -648,9 +721,14 @@ async def reactivate_user_access(req: ReactivateRequest, x_user_id: str = Header
     if result == "already_active":
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content={"success": True, "message": f"Access for {gmail} is already active.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 1}}
+            content={"success": True, "message": f"Access for {gmail} is already active.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 1, "access_status": "ACTIVE"}}
         )
-    return {"success": True, "message": f"Access reactivated for {gmail}.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 1}}
+    if result == "invited_not_activated":
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"success": False, "message": f"Account {gmail} is INVITED but not yet activated. Use 'Resend Invitation' instead.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 0, "access_status": "INVITED"}}
+        )
+    return {"success": True, "message": f"Access reactivated for {gmail}.", "user": {"uuid": user["uuid"], "gmail": user["gmail"], "role": user["role"], "is_active": 1, "access_status": "ACTIVE"}}
 
 
 @app.patch("/api/users/update-role")
@@ -679,6 +757,105 @@ async def get_access_history(gmail: str = None, x_user_id: str = Header(None)):
     actor = _require_coordinator(x_user_id)
     history = db.get_access_history(user_gmail=gmail)
     return {"success": True, "history": history, "count": len(history)}
+
+
+# ==============================================================
+# ACTIVATION / PASSWORD RESET / INVITATION ENDPOINTS
+# ==============================================================
+
+class ActivateAccountRequest(BaseModel):
+    token: str
+    password: str
+
+class ForgotPasswordRequest(BaseModel):
+    gmail: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+class ResendInvitationRequest(BaseModel):
+    gmail: str
+
+
+@app.get("/api/auth/validate-token")
+async def validate_token(token: str, purpose: str = "ACTIVATION"):
+    result = db.validate_auth_token(token, purpose)
+    if not result["valid"]:
+        return JSONResponse(status_code=400, content={"valid": False, "error": result["error"]})
+    user = db.get_user_by_id(result["user_uuid"])
+    return {"valid": True, "gmail": user["gmail"] if user else None, "role": user["role"] if user else None}
+
+
+@app.post("/api/auth/activate")
+async def activate_account(req: ActivateAccountRequest):
+    success, result = db.activate_user(req.token, req.password)
+    if not success:
+        return JSONResponse(status_code=400, content={"success": False, "message": result})
+    return {"success": True, "message": "Account activated successfully. You can now log in.", "user": result}
+
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest):
+    gmail = req.gmail.strip().lower()
+    raw_token, user = db.request_password_reset(gmail)
+
+    # Generic response regardless of whether user exists
+    response = {"success": True, "message": "If an account exists for this email, a password reset link has been generated."}
+
+    if raw_token and user:
+        reset_url = f"{email_service.APP_BASE_URL}/#/reset-password/{raw_token}"
+        email_result = email_service.send_password_reset_email(gmail, reset_url)
+        response["email_sent"] = email_result.get("sent", False)
+        response["delivery_mode"] = email_result.get("delivery_mode", "none")
+        if not email_result.get("sent"):
+            response["dev_reset_url"] = reset_url
+
+    return response
+
+
+@app.post("/api/auth/reset-password")
+async def reset_password_endpoint(req: ResetPasswordRequest):
+    success, message = db.reset_password(req.token, req.password)
+    if not success:
+        return JSONResponse(status_code=400, content={"success": False, "message": message})
+    return {"success": True, "message": message}
+
+
+@app.post("/api/users/resend-invitation")
+async def resend_invitation(req: ResendInvitationRequest, x_user_id: str = Header(None)):
+    actor = _require_coordinator(x_user_id)
+    gmail = req.gmail.strip().lower()
+    if not gmail or "@" not in gmail:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    user, result = db.resend_invitation(gmail, actor_uuid=actor["uuid"], actor_gmail=actor["gmail"])
+    if user is None:
+        raise HTTPException(status_code=400, detail=result)
+
+    raw_token = result
+    activation_url = f"{email_service.APP_BASE_URL}/#/activate/{raw_token}"
+    email_result = email_service.send_invitation_email(gmail, user["role"], activation_url)
+
+    email_sent = email_result.get("sent", False)
+    delivery_mode = email_result.get("delivery_mode", "none")
+    if email_sent:
+        msg = f"Invitation email resent to {gmail}."
+    elif delivery_mode == "development":
+        msg = f"New invitation created for {gmail}, but email delivery is not configured."
+    else:
+        msg = f"New invitation created for {gmail}, but the email could not be delivered."
+
+    resp = {
+        "success": True,
+        "message": msg,
+        "email_sent": email_sent,
+        "delivery_mode": delivery_mode,
+    }
+    if not email_sent:
+        resp["dev_activation_url"] = activation_url
+
+    return resp
 
 
 # ==============================================================
@@ -828,7 +1005,10 @@ def _requester(user_id: str, role: str, department: str):
     user = db.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=401, detail="Unknown user")
-    if not user.get("is_active", True):
+    access_status = user.get("access_status") or ("ACTIVE" if user.get("is_active", True) else "REVOKED")
+    if access_status == "INVITED":
+        raise HTTPException(status_code=403, detail="Account activation is required")
+    if access_status == "REVOKED" or not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account access has been revoked")
     if role and role.strip().lower() != user["role"].strip().lower():
         raise HTTPException(status_code=403, detail="User role does not match the authenticated account")
