@@ -381,6 +381,27 @@ def get_drive_results_count(drive_id):
         return session.scalar(select(func.count()).select_from(StudentDriveResult).where(StudentDriveResult.drive_id == drive_id)) or 0
 
 
+def get_drive_failure_rates(drive_ids):
+    """Return population failure rates used to weight student result evidence."""
+    normalized_ids = {drive_id for drive_id in drive_ids if drive_id}
+    if not normalized_ids:
+        return {}
+
+    rates = {}
+    with SessionLocal() as session:
+        records = session.scalars(select(StudentDriveResult).where(StudentDriveResult.drive_id.in_(normalized_ids))).all()
+        grouped = {}
+        for record in records:
+            result = (record.result or "").lower()
+            grouped.setdefault(record.drive_id, []).append(
+                any(term in result for term in ("rejected", "failed", "fail"))
+            )
+        for drive_id in normalized_ids:
+            outcomes = grouped.get(drive_id, [])
+            rates[drive_id] = sum(outcomes) / len(outcomes) if outcomes else 0.5
+    return rates
+
+
 def _normalize_role(role):
     return {
         "student": "Student", "mentor": "Mentor", "coordinator": "Coordinator", "admin": "Coordinator",
