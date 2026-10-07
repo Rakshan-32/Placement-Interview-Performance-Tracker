@@ -1,11 +1,13 @@
 import json
 import os
+import random
 import re
 import time
 from collections import Counter, defaultdict
 from typing import Any
 
 import httpx
+import db
 
 
 class AgentConfigurationError(RuntimeError):
@@ -33,10 +35,28 @@ def classify_result(result: str) -> str:
     return "pending"
 
 
+def sample_result_classification(result: str, sampler: random.SystemRandom) -> str:
+    """Sample an interpretation of a result instead of treating labels as certain."""
+    classification = classify_result(result)
+    if classification == "failed":
+        return sampler.choices(["failed", "pending", "passed"], weights=[0.75, 0.15, 0.10], k=1)[0]
+    if classification in {"passed", "shortlisted"}:
+        return sampler.choices(["passed", "shortlisted", "failed"], weights=[0.75, 0.15, 0.10], k=1)[0]
+    return sampler.choices(["pending", "failed", "passed"], weights=[0.50, 0.25, 0.25], k=1)[0]
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, round((len(ordered) - 1) * fraction)))
+    return ordered[index]
+
+
 def analyse_student_patterns(records: list[dict[str, Any]]) -> dict[str, Any]:
+    sampler = random.SystemRandom()
+    sampled_classifications = [sample_result_classification(record.get("result"), sampler) for record in records]
     total_rounds = len(records)
-    passed = sum(classify_result(record.get("result")) in {"passed", "shortlisted"} for record in records)
-    failed_records = [record for record in records if classify_result(record.get("result")) == "failed"]
+    passed = sum(classification in {"passed", "shortlisted"} for classification in sampled_classifications)
+    failed_records = [record for record, classification in zip(records, sampled_classifications) if classification == "failed"]
     failed_by_round = Counter()
     weaknesses = Counter()
     rejection_reasons = Counter()
@@ -50,16 +70,36 @@ def analyse_student_patterns(records: list[dict[str, Any]]) -> dict[str, Any]:
         reason = (record.get("rejection_reason") or "Unspecified rejection reason").strip()
         rejection_reasons[reason] += 1
 
-    for record in records:
+    for record, classification in zip(records, sampled_classifications):
         score = record.get("score")
-        if score is not None:
+        if score is not None and classification != "pending":
             try:
                 scores.append(float(score))
             except (TypeError, ValueError):
                 pass
 
     pass_rate = round((passed / total_rounds) * 100, 1) if total_rounds else 0.0
-    risk_level = "high" if len(failed_records) >= 3 else "medium" if failed_records else "low"
+
+    # Build a Beta posterior. A failure on an easy drive is stronger evidence
+    # than a failure on a drive where most candidates fail. Sampling the
+    # posterior makes uncertainty visible instead of returning a fixed score.
+    drive_failure_rates = db.get_drive_failure_rates(record.get("drive_id") for record in records)
+    posterior_alpha = 2.0
+    posterior_beta = 2.0
+    for record, classification in zip(records, sampled_classifications):
+        if classification not in {"failed", "passed", "shortlisted"}:
+            continue
+        drive_rate = min(max(drive_failure_rates.get(record.get("drive_id"), 0.5), 0.05), 0.95)
+        if classification == "failed":
+            posterior_alpha += 1.0 - drive_rate
+            posterior_beta += drive_rate * 0.25
+        else:
+            posterior_beta += 1.0 - (drive_rate * 0.25)
+
+    posterior_mean = posterior_alpha / (posterior_alpha + posterior_beta)
+    samples = [sampler.betavariate(posterior_alpha, posterior_beta) for _ in range(256)]
+    risk_probability = round(samples[-1], 3)
+    risk_level = "high" if risk_probability >= 0.70 else "medium" if risk_probability >= 0.40 else "low"
 
     return {
         "total_rounds": total_rounds,
@@ -67,6 +107,12 @@ def analyse_student_patterns(records: list[dict[str, Any]]) -> dict[str, Any]:
         "failed_rounds": len(failed_records),
         "pass_rate": pass_rate,
         "risk_level": risk_level,
+        "risk_probability": risk_probability,
+        "risk_score": round(risk_probability * 100, 1),
+        "risk_probability_mean": round(posterior_mean, 3),
+        "risk_interval": [round(_percentile(samples, 0.1), 3), round(_percentile(samples, 0.9), 3)],
+        "posterior": {"alpha": round(posterior_alpha, 3), "beta": round(posterior_beta, 3)},
+        "drive_failure_rates": drive_failure_rates,
         "failed_by_round": dict(failed_by_round),
         "top_weaknesses": [
             {"area": area, "count": count} for area, count in weaknesses.most_common()
@@ -77,6 +123,7 @@ def analyse_student_patterns(records: list[dict[str, Any]]) -> dict[str, Any]:
         ],
         "score_average": round(sum(scores) / len(scores), 2) if scores else None,
         "records": records,
+        "sampled_classifications": sampled_classifications,
     }
 
 
