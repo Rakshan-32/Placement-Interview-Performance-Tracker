@@ -72,10 +72,12 @@ async def upload_user_access(file: UploadFile = File(...), default_role: str = F
         upload_service.record_failure("User Access", file.filename, exc)
         return JSONResponse(status_code=400, content={"success": False, "message": str(exc), "detail": str(exc)})
     processed = [db.upsert_user_account(item["email"], item["role"], item.get("password")) for item in records]
-    created = sum(item["action"] == "Created" for item in processed)
-    updated = len(processed) - created
+    invited = sum(1 for item in processed if item["action"] == "Invited")
+    updated = sum(1 for item in processed if "Updated" in item["action"])
+    skipped_revoked = sum(1 for item in processed if "Revoked" in item.get("action", ""))
+    skipped_invited = sum(1 for item in processed if "Already Invited" in item.get("action", "") or "Skipped (Invited)" in item.get("action", ""))
     db.record_upload_log("User Access Onboarding", file.filename, len(records) + skipped_count, len(processed), skipped_count)
-    return {"success": True, "message": f"Successfully granted access to {len(processed)} user accounts ({created} created, {updated} updated).", "total_rows": len(records) + skipped_count, "total_processed": len(processed), "created_count": created, "updated_count": updated, "skipped_count": skipped_count, "processed_users": processed, "users": processed}
+    return {"success": True, "message": f"Successfully processed {len(processed)} user accounts ({invited} invited, {updated} updated).", "total_rows": len(records) + skipped_count, "total_processed": len(processed), "invited_count": invited, "created_count": invited, "updated_count": updated, "skipped_revoked": skipped_revoked, "skipped_invited": skipped_invited, "skipped_count": skipped_count, "processed_users": processed, "users": processed}
 
 
 async def upload_student_roster(file: UploadFile = File(...)):

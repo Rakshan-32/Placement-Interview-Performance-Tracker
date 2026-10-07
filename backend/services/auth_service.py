@@ -3,8 +3,21 @@ import db
 
 def authenticate(gmail: str, password: str):
     user = db.get_user_by_gmail(gmail)
-    if not user or user["password"] != password:
+    if not user:
         return None
+
+    access_status = user.get("access_status") or ("ACTIVE" if user.get("is_active", True) else "REVOKED")
+    if access_status == "INVITED":
+        return {"blocked": True, "reason": "activation_required"}
+    if access_status == "REVOKED" or not user.get("is_active", True):
+        return {"blocked": True, "reason": "revoked"}
+
+    if not db.verify_password(password, user["password"]):
+        return None
+
+    if not db.is_hashed(user["password"]):
+        db.migrate_legacy_password(user["uuid"], password)
+
     return {
         "uuid": user["uuid"],
         "gmail": user["gmail"],

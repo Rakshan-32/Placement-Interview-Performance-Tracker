@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -19,9 +19,38 @@ class User(Base):
     gmail: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     password: Mapped[str] = mapped_column(String, nullable=False)
     role: Mapped[str] = mapped_column(String, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[str] = mapped_column(String, default=timestamp_value)
-    department: Mapped[str] = mapped_column(String, default="CSE")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("1"))
+    created_at: Mapped[str] = mapped_column(String, default=timestamp_value, server_default=text("(datetime('now'))"))
+    department: Mapped[str] = mapped_column(String, default="CSE", server_default=text("'CSE'"))
+    access_status: Mapped[str] = mapped_column(String, default="ACTIVE", server_default=text("'ACTIVE'"))
+
+
+class AccessHistory(Base):
+    __tablename__ = "access_history"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_uuid: Mapped[str] = mapped_column(String, nullable=False)
+    user_gmail: Mapped[str] = mapped_column(String, nullable=False)
+    actor_uuid: Mapped[str | None] = mapped_column(String)
+    actor_gmail: Mapped[str | None] = mapped_column(String)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    old_role: Mapped[str | None] = mapped_column(String)
+    new_role: Mapped[str | None] = mapped_column(String)
+    old_status: Mapped[str | None] = mapped_column(String)
+    new_status: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[str] = mapped_column(String, default=timestamp_value, server_default=text("(datetime('now'))"))
+
+
+class AuthToken(Base):
+    __tablename__ = "auth_tokens"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_uuid: Mapped[str] = mapped_column(String, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False)
+    purpose: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    used_at: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[str] = mapped_column(String, default=timestamp_value, server_default=text("(datetime('now'))"))
 
 
 class Drive(Base):

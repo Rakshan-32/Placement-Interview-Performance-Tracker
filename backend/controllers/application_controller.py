@@ -118,6 +118,11 @@ def _requester(user_id, role, department):
     user = db.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=401, detail="Unknown user")
+    access_status = user.get("access_status") or ("ACTIVE" if user.get("is_active", True) else "REVOKED")
+    if access_status == "INVITED":
+        raise HTTPException(status_code=403, detail="Account activation is required")
+    if access_status == "REVOKED" or not user.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Your account has been revoked")
     if role and role.strip().lower() != user["role"].strip().lower():
         raise HTTPException(status_code=403, detail="User role does not match the authenticated account")
     user["department"] = department or user.get("department") or "CSE"

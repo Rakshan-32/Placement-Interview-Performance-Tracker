@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 import db
+import email_service
 from backend.routes.application_routes import router as application_router
 from backend.routes.auth_routes import router as auth_router
 from backend.routes.drive_routes import router as drive_router
@@ -35,6 +36,7 @@ app.include_router(drive_router)
 app.include_router(upload_router)
 app.include_router(application_router)
 
+# Serve static frontend files
 PUBLIC_DIR = os.path.join(os.path.dirname(__file__), "public")
 if os.path.exists(PUBLIC_DIR):
     app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")

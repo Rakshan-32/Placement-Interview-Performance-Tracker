@@ -22,6 +22,8 @@ def setup_database():
     conn.commit()
     conn.close()
     db.init_db()
+    import db as root_db
+    root_db.init_db()
 
 def test_health_and_root():
     res = client.get("/health")
@@ -275,4 +277,3 @@ def test_export_user_access():
     csv_text = res_csv.content.decode("utf-8-sig")
     assert "User Email" in csv_text
     assert "Role" in csv_text
-

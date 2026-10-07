@@ -21,3 +21,34 @@ class GrantSingleAccessRequest(BaseModel):
     gmail: str
     role: str = "Student"
     password: str = None
+
+
+class RevokeRequest(BaseModel):
+    gmail: str
+
+
+class ReactivateRequest(BaseModel):
+    gmail: str
+
+
+class RoleUpdateRequest(BaseModel):
+    gmail: str
+    new_role: str
+
+
+class ActivateAccountRequest(BaseModel):
+    token: str
+    password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    gmail: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
+class ResendInvitationRequest(BaseModel):
+    gmail: str
